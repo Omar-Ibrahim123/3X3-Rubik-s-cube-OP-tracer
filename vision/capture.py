@@ -212,7 +212,7 @@ def analyze_dir(folder: str):
             # Diagnostic: show the top contours by area and why each was
             # rejected, so detection can be tuned against reality.
             print(f"  {name}: NOT detected")
-            mask = _cube_edge_mask(frame)
+            mask = _cube_edge_mask(frame)[0]
             contours, _ = cv2.findContours(
                 mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
             )
@@ -243,7 +243,7 @@ def analyze_dir(folder: str):
                 cv2.circle(disp, (int(x), int(y)), 8, (0, 255, 0), 2)
         base, _ = os.path.splitext(path)
         cv2.imwrite(base + "_annotated.png", disp)
-        cv2.imwrite(base + "_mask.png", _cube_edge_mask(frame))
+        cv2.imwrite(base + "_mask.png", _cube_edge_mask(frame)[0])
     print(f"\n{detected}/{len(paths)} frames detected. "
           f"Annotated + mask images written next to each frame.")
 
@@ -265,28 +265,24 @@ def _cube_edge_mask(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
     edges = cv2.Canny(gray, 50, 150)
-    # Dilate/close so the many small sticker-border edges fuse. The edge image
-    # of a cube is a LATTICE (sticker outlines), so a plain fill leaves holes
-    # and the blob's 'extent' stays low. Use a larger kernel to bridge the 3x3
-    # gaps into one mass.
-    k = max(7, int(round(min(h, w) * 0.05)) | 1)
+    # Bridge the sticker-border lattice into a filled blob -- but modestly, so
+    # the cube does NOT merge with nearby face/hair/poster detail into one giant
+    # region (that caused far-away false positives covering the whole head).
+    k = max(5, int(round(min(h, w) * 0.025)) | 1)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
     mask = cv2.dilate(edges, kernel, iterations=1)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-    # Replace each sizable contour with its CONVEX HULL (filled). A lattice's
-    # hull is a solid square, so the cube becomes a solidly-filled blob with
-    # high extent -- which is what the face scorer needs.
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+    # Erode back to undo the dilation's growth and snap thin bridges to other
+    # detail, leaving the cube as its own compact blob.
+    mask = cv2.erode(mask, kernel, iterations=1)
+    # Fill interior holes (the lattice gaps) so the blob is solid, WITHOUT a
+    # convex hull (hulling tended to swallow neighbouring detail).
     contours, _ = cv2.findContours(
         mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
-    out = np.zeros_like(mask)
-    frame_area = float(h * w)
-    for c in contours:
-        if cv2.contourArea(c) < frame_area * 0.01:
-            continue
-        hull = cv2.convexHull(c)
-        cv2.drawContours(out, [hull], -1, 255, thickness=cv2.FILLED)
-    return out
+    if contours:
+        cv2.drawContours(mask, contours, -1, 255, thickness=cv2.FILLED)
+    return mask, edges
 
 
 def _sticker_mask(frame):
@@ -340,7 +336,7 @@ def _find_cube_face(frame, min_frac=0.02, max_frac=0.75):
     from .detect import score_face_candidate
 
     h, w = frame.shape[:2]
-    mask = _cube_edge_mask(frame)
+    mask, edges = _cube_edge_mask(frame)
     contours, _ = cv2.findContours(
         mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
@@ -353,13 +349,24 @@ def _find_cube_face(frame, min_frac=0.02, max_frac=0.75):
         if rw <= 0 or rh <= 0:
             continue
         extent = a / (rw * rh)
-        # Score centrality + squareness + fill + size; busy-background regions
-        # at the edges score low or are rejected (returns 0).
         s = score_face_candidate(rcx, rcy, rw, rh, extent, float(w), float(h))
-        if s > best_score:
-            best_score = s
-            size = (rw + rh) / 2.0
-            best = (rcx, rcy, size, math.radians(ang))
+        if s <= 0 or s <= best_score:
+            continue
+        # Validate by EDGE DENSITY inside the candidate box: a real cube is
+        # uniformly packed with edges; a far-away false positive that spans the
+        # head/wall is mostly empty. This rejects the 'cube+face+wall' blobs.
+        x, y, bw, bh = cv2.boundingRect(c)
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(w, x + bw), min(h, y + bh)
+        sub = edges[y0:y1, x0:x1]
+        if sub.size == 0:
+            continue
+        density = float((sub > 0).sum()) / sub.size
+        if density < 0.06:  # too sparse to be a detail-packed cube face
+            continue
+        best_score = s
+        size = (rw + rh) / 2.0
+        best = (rcx, rcy, size, math.radians(ang))
     return best
 
 
@@ -958,7 +965,7 @@ def spin_scan_auto(
             # In debug, show the detection mask + the found cube square, so we
             # can see what the detector is keying on.
             if debug:
-                cv2.imshow("detection mask", _cube_edge_mask(frame))
+                cv2.imshow("detection mask", _cube_edge_mask(frame)[0])
                 if face is not None:
                     cv2.circle(disp, (int(face[0]), int(face[1])),
                                int(face[2] / 2), (255, 0, 255), 2)
