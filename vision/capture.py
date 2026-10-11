@@ -384,8 +384,14 @@ def _sample_cell(frame, center: Tuple[int, int], half: int) -> RGB:
     _, np = _lazy_imports()
     from .detect import trimmed_median_color
 
-    x, y = center
-    patch = frame[y - half : y + half, x - half : x + half]
+    # Detected cell centers are floats; NumPy slicing needs ints. Round, clamp
+    # to the frame, and ensure a non-empty patch.
+    fh, fw = frame.shape[:2]
+    x, y = int(round(center[0])), int(round(center[1]))
+    half = max(1, int(round(half)))
+    x0, x1 = max(0, x - half), min(fw, x + half)
+    y0, y1 = max(0, y - half), min(fh, y + half)
+    patch = frame[y0:y1, x0:x1]
     if patch.size == 0:
         return (0.0, 0.0, 0.0)
     # Downsample large patches so the pure trimmed-median stays fast (9 patches
