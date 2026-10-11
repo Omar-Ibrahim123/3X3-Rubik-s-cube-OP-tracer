@@ -66,6 +66,28 @@ def has_logo_signature(
     return (white_n / n) >= min_white_frac and (logo_n / n) >= min_logo_frac
 
 
+def logo_signature_fractions(pixels):
+    """Diagnostic: return (white_frac, logo_frac, mean_brightness) for a patch.
+
+    Lets us see WHY has_logo_signature does or doesn't fire on a real center
+    patch, so the thresholds can be tuned to actual camera values.
+    """
+    if not pixels:
+        return (0.0, 0.0, 0.0)
+    n = len(pixels)
+    white_n = logo_n = 0
+    bright_sum = 0.0
+    for (r, g, b) in pixels:
+        brightness = (r + g + b) / 3.0
+        bright_sum += brightness
+        sat = (max(r, g, b) - min(r, g, b)) / brightness if brightness > 0 else 0.0
+        if brightness > 160 and sat < 0.5:
+            white_n += 1
+        elif sat > 0.7:
+            logo_n += 1
+    return (white_n / n, logo_n / n, bright_sum / n)
+
+
 def dominant_color(
     pixels: Sequence[Tuple[float, float, float]], bin_size: int = 48
 ) -> Tuple[float, float, float]:

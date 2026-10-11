@@ -503,6 +503,23 @@ def _sample_center_sticker(frame, center, half, white_ref=None):
     return dominant_color(rgb_pixels)
 
 
+def _raw_patch_pixels(frame, center, half):
+    """Return the raw RGB pixels of a sticker patch (for diagnostics)."""
+    _, np = _lazy_imports()
+    fh, fw = frame.shape[:2]
+    x, y = int(round(center[0])), int(round(center[1]))
+    half = max(2, int(round(half * 1.1)))
+    x0, x1 = max(0, x - half), min(fw, x + half)
+    y0, y1 = max(0, y - half), min(fh, y + half)
+    patch = frame[y0:y1, x0:x1]
+    if patch.size == 0:
+        return []
+    pix = patch.reshape(-1, 3)
+    if len(pix) > 600:
+        pix = pix[:: len(pix) // 600]
+    return [(float(p[2]), float(p[1]), float(p[0])) for p in pix]
+
+
 def _sample_face(frame, centers, patch_half, white_ref=None):
     """Sample all 9 stickers; the center (index 4) uses logo-robust sampling.
 
@@ -1048,8 +1065,15 @@ def spin_scan_auto(
                         face_now = classifier.classify(cc)
                         on_screen = ("already have" if face_now
                                      in collector.collected_faces() else "NEW")
+                        # Also report the logo-signature fractions on the RAW
+                        # center patch, so we can see why logo-detection does or
+                        # doesn't fire on the actual face in view.
+                        from .detect import logo_signature_fractions
+                        raw = _raw_patch_pixels(frame, centers[4], patch_half)
+                        wf, lf, mb = logo_signature_fractions(raw)
                         print(f"[debug] center=({cc[0]:.0f},{cc[1]:.0f},"
                               f"{cc[2]:.0f}) -> {face_now} ({on_screen}); "
+                              f"logo[white={wf:.2f} logo={lf:.2f} bright={mb:.0f}]; "
                               f"collected={''.join(collector.collected_faces())}")
                 _draw_detection(disp, centers, classifier, debug)
 
