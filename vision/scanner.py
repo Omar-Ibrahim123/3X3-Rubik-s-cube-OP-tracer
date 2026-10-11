@@ -107,10 +107,14 @@ class StaticScanner(FaceletSource):
         attempts = 0
         while True:
             if mode == "auto":
-                # Automatic detection: find the 9 sticker squares each frame, so
-                # sampling always lands on stickers (no box to align).
-                self._classifier, faces = capture.spin_scan_auto(
-                    camera_index=self._camera_index, debug=self._debug
+                # Qbr-style: first CALIBRATE by showing all six faces (learn the
+                # user's real colors), then spin-scan classifying by perceptual
+                # (CIEDE2000) nearest match to those learned colors.
+                palette = capture.calibrate_palette(self._camera_index)
+                self._classifier = ColorClassifier.from_palette(palette)
+                _, faces = capture.spin_scan_auto(
+                    camera_index=self._camera_index, debug=self._debug,
+                    classifier=self._classifier,
                 )
             elif mode == "box":
                 # Fixed box the user sizes with +/- (previous default).

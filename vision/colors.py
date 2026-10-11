@@ -117,18 +117,29 @@ class ColorClassifier:
     # measured white so the user's lighting cast is removed.
     wb_gains: Tuple[float, float, float] = (1.0, 1.0, 1.0)
 
-    @classmethod
-    def from_centers(cls, centers: Dict[str, RGB]) -> "ColorClassifier":
-        """Build a classifier from the six calibrated center colors.
+    # When True, classify with LAB + CIEDE2000 against the learned palette
+    # (the robust Qbr-style path) instead of the legacy white-balanced HSV.
+    perceptual: bool = False
 
-        White-balance is derived from the measured white (U) center so the
-        same cast correction applies as in the single-white flow.
+    @classmethod
+    def from_palette(cls, centers: Dict[str, RGB]) -> "ColorClassifier":
+        """Build a classifier from the six measured center colors (Qbr-style).
+
+        This is the robust path: the user shows all six faces during a short
+        calibrate step, we record each center's REAL color, and classify every
+        sticker by nearest perceptual (CIEDE2000) match to those learned colors.
+        No white-balance guessing, no fixed references -- it compares the user's
+        real colors to the user's real colors.
         """
         missing = set(FACE_NAMES) - set(centers)
         if missing:
             raise ValueError(f"calibration missing faces: {sorted(missing)}")
-        gains = _wb_gains_from_white(centers["U"])
-        return cls(references=dict(centers), wb_gains=gains)
+        return cls(references=dict(centers), perceptual=True)
+
+    @classmethod
+    def from_centers(cls, centers: Dict[str, RGB]) -> "ColorClassifier":
+        """Alias kept for compatibility; same as from_palette (perceptual)."""
+        return cls.from_palette(centers)
 
     @classmethod
     def from_white_anchor(cls, white_sample: RGB) -> "ColorClassifier":
@@ -151,15 +162,24 @@ class ColorClassifier:
         g = self.wb_gains
         return tuple(max(0.0, min(255.0, sample[i] * g[i])) for i in range(3))
 
+    def _dist(self, sample: RGB, ref: RGB) -> float:
+        if self.perceptual:
+            from .colorsci import rgb_distance
+            return rgb_distance(sample, ref)
+        return color_distance(self._balance(sample), ref)
+
     def classify(self, sample: RGB) -> str:
-        """Return the face letter whose reference is nearest the WB'd sample."""
+        """Return the face letter whose reference is nearest `sample`.
+
+        Perceptual (calibrated palette): LAB + CIEDE2000 nearest match.
+        Legacy (white-anchor): white-balanced HSV distance.
+        """
         if not self.references:
             raise RuntimeError("classifier is not calibrated")
-        s = self._balance(sample)
         best_face = None
         best_dist = float("inf")
         for face, ref in self.references.items():
-            d = color_distance(s, ref)
+            d = self._dist(sample, ref)
             if d < best_dist:
                 best_dist = d
                 best_face = face
@@ -171,9 +191,8 @@ class ColorClassifier:
         A small margin means the sample is ambiguous (e.g. a borderline
         orange/red), which the capture layer can surface for a re-scan.
         """
-        s = self._balance(sample)
         dists = sorted(
-            (color_distance(s, ref), face)
+            (self._dist(sample, ref), face)
             for face, ref in self.references.items()
         )
         best_d, best_face = dists[0]

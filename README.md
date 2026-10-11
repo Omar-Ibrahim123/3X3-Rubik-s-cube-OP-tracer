@@ -74,16 +74,20 @@ python -m app.main --scan                  # add --camera 1 if the wrong cam ope
 color scheme (white opposite yellow, green opposite blue, red opposite orange).
 
 The cube face is **detected automatically** — there's no box to line the cube
-up with. It all happens in one window:
+up with. The scan has two steps:
 
-1. **Show white** — hold the **white** face toward the camera until it's
-   detected (its 9 stickers get circled), then press **SPACE**. That single
-   sample anchors the standard-scheme colors to your lighting.
-2. **Spin** — slowly rotate the cube; each face is detected and captured
-   automatically once held steady. The progress bar lights up U R F D L B as
-   they're collected — no key presses, no alignment.
+1. **Calibrate** — show each face when prompted (U white, R red, F green,
+   D yellow, L orange, B blue), filling the on-screen box; each is captured
+   automatically when steady. This learns your cube's **real** colors.
+2. **Spin** — slowly rotate the cube through all six faces; each is detected and
+   captured once held steady. The progress bar lights up U R F D L B.
 3. **Confirm** — it prints the detected cube; press **y** to accept (or **n** to
    re-scan). Then it prints the OP trace.
+
+Colors are classified by **CIEDE2000** perceptual distance in CIE L\*a\*b\*
+against your calibrated palette — comparing your real colors to your real colors
+rather than fixed thresholds, which is far more robust under colored lighting
+(this is what finally fixed the orange↔red / green↔white confusion).
 
 How detection works: each frame the app finds the individual sticker squares,
 then locates the one whose 3×3 neighbor grid is complete (the center sticker);
@@ -165,3 +169,9 @@ Cube-face detection (finding the sticker squares and locating the one whose
 License. The adaptation lives in `vision/detect.py`
 (`find_cube_by_neighbors`, `is_sticker_square`) and `vision/capture.py`
 (`_find_sticker_boxes`).
+
+Color classification uses calibration on all six colors + perceptual
+**CIEDE2000** distance in CIE L\*a\*b\*, the same approach Qbr uses. The LAB
+conversion and CIEDE2000 routines in `vision/colorsci.py` are adapted from a
+widely-used sRGB→LAB routine and from
+[lovro-i/CIEDE2000](https://github.com/lovro-i/CIEDE2000), as used by Qbr.

@@ -503,6 +503,85 @@ def _sample_center_sticker(frame, center, half, white_ref=None):
     return dominant_color(rgb_pixels)
 
 
+def calibrate_palette(camera_index=0, steady_frames=5):
+    """Qbr-style calibration: show each face; record its CENTER color.
+
+    Returns {face_letter: RGB} -- the user's real six colors under their
+    lighting, for perceptual (CIEDE2000) classification. The user shows all six
+    faces in the fixed order U R F D L B; each is auto-captured once a cube face
+    is detected and held steady. The logo-robust center sampler is used, so a
+    center logo doesn't corrupt the white reference.
+    """
+    cv2, _ = _lazy_imports()
+
+    order = ("U", "R", "F", "D", "L", "B")
+    prompts = {
+        "U": "UP (white)", "R": "RIGHT (red)", "F": "FRONT (green)",
+        "D": "DOWN (yellow)", "L": "LEFT (orange)", "B": "BACK (blue)",
+    }
+    cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
+        raise RuntimeError(f"could not open camera index {camera_index}")
+    palette = {}
+    win = "calibrate - show each face"
+    try:
+        for face in order:
+            streak = 0
+            last_center = None
+            while True:
+                ok, frame = cap.read()
+                if not ok:
+                    raise RuntimeError("failed to read camera frame")
+                disp = frame.copy()
+                centers = _detect_face_centers(frame)
+                detected = centers is not None
+                _draw_closer_guide(disp, detected)
+                cv2.putText(disp, f"Calibrate: show the {prompts[face]} face",
+                            (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                            (0, 255, 255), 2, cv2.LINE_AA)
+                cv2.putText(disp, "fill the box; auto-captures when steady",
+                            (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                            (200, 200, 200), 1, cv2.LINE_AA)
+                got = "".join(palette.keys())
+                cv2.putText(disp, f"done: {got or '-'}", (20, disp.shape[0] - 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 220, 0), 1,
+                            cv2.LINE_AA)
+                if detected:
+                    import math as _m
+                    dists = [_m.hypot(centers[i][0] - centers[j][0],
+                                      centers[i][1] - centers[j][1])
+                             for i, j in ((0, 1), (1, 2), (3, 4), (4, 5))]
+                    spacing = sorted(dists)[len(dists) // 2]
+                    ph = max(4, int(spacing * 0.28))
+                    cc = _sample_center_sticker(frame, centers[4], ph)
+                    _draw_detection(disp, centers)
+                    # Require the center reading to be steady before accepting.
+                    if (last_center is not None
+                            and _color_close(cc, last_center, 25)):
+                        streak += 1
+                    else:
+                        streak = 1
+                    last_center = cc
+                    if streak >= steady_frames:
+                        palette[face] = cc
+                        break
+                else:
+                    streak = 0
+                    last_center = None
+                cv2.imshow(win, disp)
+                key = cv2.waitKey(1) & 0xFF
+                if key in (ord("q"), 27):
+                    raise KeyboardInterrupt("calibration aborted")
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+    return palette
+
+
+def _color_close(a, b, tol):
+    return all(abs(a[i] - b[i]) <= tol for i in range(3))
+
+
 def _raw_patch_pixels(frame, center, half):
     """Return the raw RGB pixels of a sticker patch (for diagnostics)."""
     _, np = _lazy_imports()
@@ -954,20 +1033,18 @@ def spin_scan_auto(
     camera_index: int = 0,
     steady_frames: int = 6,
     debug: bool = False,
+    classifier=None,
 ):
     """Automatic face detection: no box to fit the cube into.
 
-    One window. Phase A: hold the WHITE face up until it's detected (9 squares
-    found), press SPACE to calibrate. Phase B: slowly rotate the cube; each face
-    is auto-detected and auto-captured by its center color when steady.
-
-    Detection finds the 9 sticker squares in the frame (vision/detect.py orders
-    them), so sampling always lands on the stickers -- removing the alignment
-    problem the fixed box had. Returns (classifier, {face: 9 samples}).
+    If `classifier` is given (the Qbr-style path: calibrated from all six
+    centers), Phase A (single-white calibration) is skipped and we go straight
+    to spinning. Otherwise Phase A still does the legacy white-anchor calibrate.
+    Phase B: slowly rotate the cube; each face is auto-detected and captured.
+    Returns (classifier, {face: 9 samples}).
     """
     cv2, _ = _lazy_imports()
     from .colors import ColorClassifier
-    from .detect import detect_face_grid
     from .spin import FaceCandidate, SpinCollector
 
     cap = cv2.VideoCapture(camera_index)
@@ -975,8 +1052,11 @@ def spin_scan_auto(
         raise RuntimeError(f"could not open camera index {camera_index}")
 
     win = "cube scan (auto-detect)"
-    classifier = None
     collector = None
+    if classifier is not None:
+        collector = SpinCollector(
+            classifier=classifier, steady_frames=steady_frames
+        )
     just_got = None
     just_got_ttl = 0
     patch_half = 6
