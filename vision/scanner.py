@@ -80,9 +80,31 @@ class StaticScanner(FaceletSource):
         if self._classifier is None:
             raise RuntimeError("calibrate (or set_classifier) before classifying")
         facelets = assemble_facelets(faces, self._classifier)
+        facelets = self._orient(facelets)
         result = validate_facelets(facelets)
         if not result.ok:
             raise ValueError("invalid scan: " + "; ".join(result.errors))
+        return facelets
+
+    @staticmethod
+    def _orient(facelets: str) -> str:
+        """Fix per-face rotation if a unique solvable orientation exists.
+
+        Returns the re-oriented 54-char string when solve_orientation finds a
+        unique solution; otherwise returns the input unchanged so the normal
+        validation/error path reports the problem (an ambiguous or genuinely
+        unsolvable scan is better surfaced than silently reshuffled).
+        """
+        from cube.orientation import FACE_ORDER, solve_orientation
+
+        face_grids = {
+            FACE_ORDER[i]: facelets[i * 9:(i + 1) * 9] for i in range(6)
+        }
+        result = solve_orientation(face_grids)
+        if result.ok and result.facelets is not None:
+            if result.message:
+                print(f"[orientation] {result.message}")
+            return result.facelets
         return facelets
 
     def read_facelets(self) -> str:
@@ -125,6 +147,11 @@ class StaticScanner(FaceletSource):
                 faces = capture.scan_faces(self._camera_index)
 
             facelets = assemble_facelets(faces, self._classifier)
+            # Recover per-face rotation: faces are captured at whatever angle
+            # the cube was held, which otherwise yields a cube with correct
+            # colour counts but impossible pieces. solve_orientation finds the
+            # unique set of per-face rotations that make a solvable cube.
+            facelets = self._orient(facelets)
             result = validate_facelets(facelets)
 
             if result.ok:
