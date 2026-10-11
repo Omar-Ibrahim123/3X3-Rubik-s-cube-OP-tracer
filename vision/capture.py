@@ -851,24 +851,91 @@ def spin_scan(
     return collector.faces()
 
 
-def confirm_facelets(facelets: str, classifier=None) -> bool:
-    """Show the detected cube as text and ask for a one-key confirm.
+def confirm_facelets(facelets: str, classifier=None, report=None) -> bool:
+    """Show the detected cube as a COLOURED NET and ask for a one-key confirm.
 
-    Returns True to accept, False to re-scan. Printed to the console (no extra
-    window) so it works even on minimal setups.
+    `report` (optional) is a vision.confirm.ScanReport adding a solvability /
+    parity line and low-confidence sticker warnings, so the user can tell a
+    correct read from a plausible-but-wrong one. Falls back to a plain net when
+    no report is given. A coloured net image is also shown in an OpenCV window
+    (best-effort) so the detected cube can be compared to the physical one.
+
+    Returns True to accept, False to re-scan.
     """
-    print("\nDetected cube (facelet string):")
-    print(f"  {facelets}")
-    print("Faces (U R F D L B), each read top-left to bottom-right:")
-    for i, face in enumerate(FACE_NAMES):
-        chunk = facelets[i * 9:(i + 1) * 9]
-        print(f"  {face}: {chunk[0:3]} {chunk[3:6]} {chunk[6:9]}")
+    from .confirm import net_lines
+
+    print("\nDetected cube (compare this net to the cube in your hand):")
+    for line in net_lines(facelets, color=True):
+        print("  " + line)
+    print(f"\n  facelet string: {facelets}")
+
+    if report is not None:
+        print()
+        for line in report.summary_lines():
+            print("  " + line)
+        if not report.solvable:
+            print("  WARNING: this is not a solvable cube -- a sticker is misread.")
+
+    # Best-effort: also pop up a coloured net image for easier comparison.
+    try:
+        _show_net_window(facelets)
+    except Exception:  # pragma: no cover - display is optional
+        pass
+
     while True:
-        resp = input("Accept this scan? [y]es / [n]o re-scan: ").strip().lower()
+        resp = input("\nAccept this scan? [y]es / [n]o re-scan: ").strip().lower()
         if resp in ("y", "yes", ""):
+            try:
+                cv2, _ = _lazy_imports()
+                cv2.destroyWindow("detected cube")
+            except Exception:  # pragma: no cover
+                pass
             return True
         if resp in ("n", "no"):
             return False
+
+
+def _show_net_window(facelets: str) -> None:
+    """Draw the detected cube as a coloured cross-net in an OpenCV window."""
+    cv2, np = _lazy_imports()
+
+    # BGR colours for each face letter (matches a standard scheme).
+    bgr = {
+        "U": (245, 245, 245), "R": (40, 30, 190), "F": (90, 170, 60),
+        "D": (40, 220, 240), "L": (20, 120, 240), "B": (200, 110, 20),
+    }
+    faces = {FACE_NAMES[i]: facelets[i * 9:(i + 1) * 9] for i in range(6)}
+    cell = 48
+    gap = 3
+    face_px = cell * 3 + gap * 2
+    # Net layout grid positions (col, row) for each face in the cross.
+    pos = {"U": (1, 0), "L": (0, 1), "F": (1, 1), "R": (2, 1), "B": (3, 1), "D": (1, 2)}
+    w = 4 * face_px + 5 * cell // 2
+    h = 3 * face_px + 2 * cell // 2
+    img = np.full((h, w, 3), 40, np.uint8)
+
+    def draw_face(letter, gx, gy):
+        ox = gx * (face_px + cell // 2) + cell // 2
+        oy = gy * (face_px + cell // 2) + cell // 4
+        chunk = faces[letter]
+        for i, ch in enumerate(chunk):
+            r, c = divmod(i, 3)
+            x = ox + c * (cell + gap)
+            y = oy + r * (cell + gap)
+            color = bgr.get(ch, (128, 128, 128))
+            cv2.rectangle(img, (x, y), (x + cell, y + cell), color, -1)
+            cv2.rectangle(img, (x, y), (x + cell, y + cell), (0, 0, 0), 1)
+            txt = (0, 0, 0) if ch in ("U", "D") else (255, 255, 255)
+            cv2.putText(img, ch, (x + 16, y + 32),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, txt, 2, cv2.LINE_AA)
+
+    for letter, (gx, gy) in pos.items():
+        draw_face(letter, gx, gy)
+    cv2.putText(img, "Compare to your cube. Terminal: y accept / n re-scan",
+                (10, h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1,
+                cv2.LINE_AA)
+    cv2.imshow("detected cube", img)
+    cv2.waitKey(1)
 
 
 # Short names for a compact on-screen color readout.

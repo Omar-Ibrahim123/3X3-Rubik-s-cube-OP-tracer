@@ -155,8 +155,14 @@ class StaticScanner(FaceletSource):
             result = validate_facelets(facelets)
 
             if result.ok:
+                # Build a report (solvability, parity, low-confidence stickers)
+                # from the FINAL string plus the captured RGB samples, so the
+                # user can tell a correct read from a plausible-but-wrong one.
+                from .confirm import build_report
+
+                report = build_report(facelets, faces, self._classifier)
                 # One-key confirm so a subtle misread doesn't silently trace.
-                if capture.confirm_facelets(facelets, self._classifier):
+                if capture.confirm_facelets(facelets, self._classifier, report):
                     return facelets
                 print("Re-scanning at your request...")
             else:
