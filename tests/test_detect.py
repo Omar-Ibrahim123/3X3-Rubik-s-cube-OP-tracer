@@ -14,7 +14,37 @@ from vision.detect import (
     detect_face_grid,
     filter_similar_squares,
     is_sticker_blob,
+    trimmed_median_color,
 )
+
+
+# --------------------------- trimmed_median_color ---------------------------
+
+def test_trimmed_median_plain_white():
+    pix = [(240.0, 242.0, 238.0)] * 50
+    r, g, b = trimmed_median_color(pix)
+    assert abs(r - 240) < 3 and abs(g - 242) < 3 and abs(b - 238) < 3
+
+
+def test_trimmed_median_ignores_center_logo():
+    # 70% white sticker + 30% dark-grey logo pixels. The logo (dark) is dropped,
+    # so the result should read white, not grey.
+    white = [(240.0, 240.0, 240.0)] * 70
+    logo = [(70.0, 70.0, 72.0)] * 30
+    r, g, b = trimmed_median_color(white + logo)
+    assert r > 200 and g > 200 and b > 200, (r, g, b)
+
+
+def test_trimmed_median_ignores_glare():
+    # Mostly red with a few blown-out glare pixels; glare dropped from the top.
+    red = [(180.0, 30.0, 30.0)] * 80
+    glare = [(255.0, 255.0, 255.0)] * 10
+    r, g, b = trimmed_median_color(red + glare)
+    assert r > 150 and g < 70 and b < 70, (r, g, b)
+
+
+def test_trimmed_median_empty():
+    assert trimmed_median_color([]) == (0.0, 0.0, 0.0)
 
 
 # A 640x480 frame for area-fraction tests.

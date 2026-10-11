@@ -137,6 +137,14 @@ def _sticker_mask(frame):
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    # Fill interior holes so a center LOGO (a dark mark inside a white sticker)
+    # doesn't punch a hole in that sticker's blob or split it. We refill each
+    # external contour solid: holes inside a blob vanish, outer shape unchanged.
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    if contours:
+        cv2.drawContours(mask, contours, -1, 255, thickness=cv2.FILLED)
     return mask
 
 
@@ -247,17 +255,27 @@ def _grid_cell_centers(frame_w: int, frame_h: int, box: int) -> List[Tuple[int, 
 def _sample_cell(frame, center: Tuple[int, int], half: int) -> RGB:
     """Robustly sample a sticker color around `center`. Returns RGB.
 
-    Uses the MEDIAN over the patch (not mean) so the dark grid lines between
-    stickers, small specular highlights, or a stray edge don't drag the color.
+    Logo/glare robust: a center sticker may have a printed LOGO right where we
+    sample, and glossy stickers have specular highlights. We take the patch,
+    drop the darkest and brightest pixels (logo marks and glare are the
+    extremes), and return the per-channel MEDIAN of what remains -- so the
+    sticker's true color dominates even when a logo sits dead center.
     """
     _, np = _lazy_imports()
+    from .detect import trimmed_median_color
+
     x, y = center
     patch = frame[y - half : y + half, x - half : x + half]
     if patch.size == 0:
         return (0.0, 0.0, 0.0)
-    med_bgr = np.median(patch.reshape(-1, 3), axis=0)
-    b, g, r = (float(v) for v in med_bgr)
-    return (r, g, b)
+    # Downsample large patches so the pure trimmed-median stays fast (9 patches
+    # per frame). Patch is BGR; convert to RGB tuples for the shared helper.
+    pix = patch.reshape(-1, 3)
+    if len(pix) > 400:
+        step = len(pix) // 400
+        pix = pix[::step]
+    rgb_pixels = [(float(p[2]), float(p[1]), float(p[0])) for p in pix]
+    return trimmed_median_color(rgb_pixels)
 
 
 def _draw_overlay(frame, cell_centers, box, half, prompt, captured_colors=None):
