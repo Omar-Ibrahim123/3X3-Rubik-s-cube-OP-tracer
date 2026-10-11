@@ -153,6 +153,41 @@ def calibrate_centers(
     return centers
 
 
+def calibrate_white(camera_index: int = 0, box_frac: float = 0.6) -> RGB:
+    """Capture a single WHITE sample for the low-friction spin flow.
+
+    Show the white (U) face centered in the overlay and press SPACE. The
+    returned RGB is used by ColorClassifier.from_white_anchor to adapt the
+    built-in standard-scheme references to your lighting. Assumes a BOY/Western
+    cube; use calibrate_centers() if your cube uses a different scheme.
+    """
+    cv2, _ = _lazy_imports()
+    cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
+        raise RuntimeError(f"could not open camera index {camera_index}")
+    prompt = "Show the WHITE face, press SPACE  (then spin from there)"
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                raise RuntimeError("failed to read camera frame")
+            h, w = frame.shape[:2]
+            box = int(min(w, h) * box_frac)
+            half = max(4, box // 12)
+            single = [(w // 2, h // 2)]
+            disp = frame.copy()
+            _draw_overlay(disp, single, box // 3, half, prompt)
+            cv2.imshow("calibrate", disp)
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord(" "), 13):
+                return _sample_cell(frame, (w // 2, h // 2), half)
+            if key in (ord("q"), 27):
+                raise KeyboardInterrupt("calibration aborted")
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+
+
 def scan_faces(
     camera_index: int = 0,
     box_frac: float = 0.6,
