@@ -1,0 +1,7 @@
+# Development dependencies for the pure-logic core.
+# The core itself has no runtime dependencies.
+pytest>=7.0
+
+# Added in the vision phase (static scanner):
+# opencv-python>=4.8
+# numpy>=1.24
