@@ -29,6 +29,38 @@ class Square:
     size: float  # side length in pixels (approx)
 
 
+def is_sticker_blob(
+    area: float,
+    bbox_w: float,
+    bbox_h: float,
+    frame_area: float,
+    min_frac: float = 0.004,
+    max_frac: float = 0.09,
+    aspect_range: Tuple[float, float] = (0.6, 1.6),
+    min_solidity: float = 0.6,
+) -> bool:
+    """Decide whether a detected color blob is a plausible sticker.
+
+    Pure acceptance test shared by the OpenCV blob extractor, so the fiddly
+    thresholds are unit-tested rather than buried in camera code. A sticker blob
+    is sticker-sized (area within [min_frac, max_frac] of the frame), roughly
+    square (bounding-box aspect in range), and reasonably SOLID (filled area vs
+    bounding-box area) -- solidity tolerates rounded corners while rejecting
+    thin background streaks.
+    """
+    if bbox_w <= 0 or bbox_h <= 0 or frame_area <= 0:
+        return False
+    if not (frame_area * min_frac <= area <= frame_area * max_frac):
+        return False
+    aspect = bbox_w / bbox_h
+    if not (aspect_range[0] <= aspect <= aspect_range[1]):
+        return False
+    solidity = area / (bbox_w * bbox_h)
+    if solidity < min_solidity:
+        return False
+    return True
+
+
 def _median(xs: Sequence[float]) -> float:
     s = sorted(xs)
     n = len(s)

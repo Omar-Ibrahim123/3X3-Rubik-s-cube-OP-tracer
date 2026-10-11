@@ -85,11 +85,11 @@ def save_frames(camera_index: int = 0, out_dir: str = "frames"):
                 raise RuntimeError("failed to read camera frame")
             disp = frame.copy()
             # Show what the current detector sees, so detection is visible live.
-            squares = _find_sticker_squares(frame)
+            squares = _find_sticker_blobs(frame)
             centers = detect_face_grid(squares)
-            cv2.putText(disp, f"squares found: {len(squares)}", (20, 36),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2,
-                        cv2.LINE_AA)
+            cv2.putText(disp, f"regions found: {len(squares)}  (hold cube CLOSE)",
+                        (20, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255),
+                        2, cv2.LINE_AA)
             if centers is not None:
                 for (x, y) in centers:
                     cv2.circle(disp, (int(x), int(y)), 10, (0, 255, 0), 2)
@@ -115,13 +115,76 @@ def save_frames(camera_index: int = 0, out_dir: str = "frames"):
     return saved
 
 
+def _sticker_mask(frame):
+    """Binary mask of sticker-like pixels (vivid OR bright), gaps removed.
+
+    Shared by the blob detector and the debug mask view so what you SEE is
+    exactly what detection uses.
+    """
+    cv2, np = _lazy_imports()
+    h, w = frame.shape[:2]
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    s = hsv[:, :, 1]
+    v = hsv[:, :, 2]
+    # Vivid stickers: high saturation. White stickers: low saturation but high
+    # brightness. Combine both; exclude the dark gaps (low V).
+    saturated = s > 70
+    bright_white = (s <= 70) & (v > 150)
+    mask = ((saturated | bright_white) & (v > 60)).astype(np.uint8) * 255
+    # Merge each sticker into a solid blob (close gaps/glare), then open to drop
+    # thin noise.
+    k = max(3, int(round((min(h, w)) * 0.012)) | 1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    return mask
+
+
+def _find_sticker_blobs(frame, min_frac=0.004, max_frac=0.09):
+    """Detect sticker candidates by COLOR REGION (robust to rounded/glossy cubes).
+
+    Why not square contours: the user's stickerless glossy cube has rounded
+    sticker shapes, thin gaps, and glare -- edges don't form clean 4-point
+    squares. Instead we find blobs that are either vividly colored OR bright
+    (white stickers), separated from the dark gaps and most backgrounds.
+
+    Pipeline: HSV -> mask of (saturated OR bright) pixels -> morphological close
+    to merge each sticker into one blob and seal glare holes -> contours ->
+    keep blobs of sticker-ish AREA that are reasonably SOLID (filled) and
+    roughly square by bounding box. Returns detect.Square(cx, cy, size).
+
+    Area thresholds are fractions of frame area; defaults assume the cube is
+    held fairly CLOSE (fills a good part of the frame), which is the reliable
+    way to use this.
+    """
+    cv2, np = _lazy_imports()
+    from .detect import Square, is_sticker_blob
+
+    h, w = frame.shape[:2]
+    frame_area = float(h * w)
+
+    mask = _sticker_mask(frame)
+
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    blobs = []
+    for c in contours:
+        a = cv2.contourArea(c)
+        x, y, bw, bh = cv2.boundingRect(c)
+        if not is_sticker_blob(a, bw, bh, frame_area, min_frac, max_frac):
+            continue
+        cx, cy = x + bw / 2.0, y + bh / 2.0
+        blobs.append(Square(cx=cx, cy=cy, size=(bw + bh) / 2.0))
+    return blobs
+
+
 def _find_sticker_squares(frame, min_frac=0.0015, max_frac=0.08):
     """Detect candidate sticker squares in a frame -> list of detect.Square.
 
-    Thin OpenCV layer for automatic face detection: find square-ish contours of
-    plausible sticker size. The pure grid logic (vision/detect.py) decides which
-    9 form a face. Area thresholds are fractions of the frame area so they scale
-    with resolution.
+    Legacy square-contour detector (kept as a fallback). Thin OpenCV layer that
+    finds square-ish contours of plausible sticker size. The pure grid logic
+    (vision/detect.py) decides which 9 form a face.
     """
     cv2, np = _lazy_imports()
     from .detect import Square
@@ -625,7 +688,7 @@ def spin_scan_auto(
             if not ok:
                 raise RuntimeError("failed to read camera frame")
             disp = frame.copy()
-            squares = _find_sticker_squares(frame)
+            squares = _find_sticker_blobs(frame)
             centers = detect_face_grid(squares)
             detected = centers is not None
             # Scale the sampling patch to the detected sticker size.
@@ -635,10 +698,25 @@ def spin_scan_auto(
                 if sizes:
                     patch_half = max(4, int(_median(sizes) * 0.25))
 
+            # In debug, show the detection mask + draw ALL candidate blobs, so
+            # we can see what the detector is keying on and tune thresholds.
+            if debug:
+                cv2.imshow("detection mask", _sticker_mask(frame))
+                for sq in squares:
+                    cv2.rectangle(
+                        disp,
+                        (int(sq.cx - sq.size / 2), int(sq.cy - sq.size / 2)),
+                        (int(sq.cx + sq.size / 2), int(sq.cy + sq.size / 2)),
+                        (255, 0, 255), 1,
+                    )
+                cv2.putText(disp, f"regions: {len(squares)}", (20, 110),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2,
+                            cv2.LINE_AA)
+
             if classifier is None:
                 # ---- Phase A: white calibration via detection ----
                 msg = ("WHITE face detected - press SPACE" if detected
-                       else "Show the WHITE face to the camera...")
+                       else "Show WHITE face CLOSE to camera...")
                 color = (0, 220, 0) if detected else (0, 200, 255)
                 cv2.putText(disp, msg, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
                             color, 2, cv2.LINE_AA)
