@@ -1,19 +1,30 @@
-"""Vision interface boundary (static scan now, live detection later).
+"""Static cube scanner: orchestrates calibrate -> scan -> classify -> validate.
 
 `FaceletSource` is the single contract the rest of the app depends on: it
-yields a 54-character facelet string. The static scanner will implement it on
-top of OpenCV; a future `LiveTurnDetector` can implement the same contract
-(plus a turn-signal callback feeding tps.TPSCounter.record_turn) without any
-downstream changes.
+yields a 54-character facelet string. `StaticScanner` implements it on top of
+the OpenCV capture layer (vision/capture.py) and the pure color logic
+(vision/colors.py).
 
-Kept dependency-free for now so the pure-logic core imports and tests without
-requiring OpenCV. The OpenCV pipeline lands in a later phase.
+A future `LiveTurnDetector` can implement the same `FaceletSource` contract
+(plus a turn-signal callback feeding tps.TPSCounter.record_turn) without any
+downstream changes — the seam that was designed in Phase 1.
+
+The pure-logic core still imports this module without OpenCV installed: OpenCV
+is only touched when you actually call read_facelets() / run a scan.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Callable, Optional
+from typing import Callable, Dict, List, Optional, Sequence
+
+from .colors import (
+    FACE_NAMES,
+    RGB,
+    ColorClassifier,
+    assemble_facelets,
+    validate_facelets,
+)
 
 
 class FaceletSource(ABC):
@@ -26,20 +37,72 @@ class FaceletSource(ABC):
 
 
 class StaticScanner(FaceletSource):
-    """Scan a stationary cube face-by-face via a camera.
+    """Scan a stationary cube face-by-face via a webcam.
 
-    Placeholder: the OpenCV capture + color-classification pipeline is added
-    in the vision phase. The constructor accepts an optional turn-signal hook
-    now so the same object can later drive a TPS counter when live detection
-    is implemented.
+    Flow when read_facelets() is called:
+      1. Calibrate: show each center sticker once so classification is tuned
+         to your cube under your lighting.
+      2. Scan: show all six faces with the 3x3 overlay; sample 9 colors each.
+      3. Classify + assemble into a 54-char facelet string.
+      4. Validate; if invalid, report the errors and (unless disabled) let you
+         re-scan rather than feeding garbage to the solver.
+
+    `on_turn` is accepted now (unused for static scanning) so the same object
+    shape can later drive a TPS counter when live detection is added.
     """
 
-    def __init__(self, on_turn: Optional[Callable[[], None]] = None):
+    def __init__(
+        self,
+        camera_index: int = 0,
+        on_turn: Optional[Callable[[], None]] = None,
+        max_rescans: int = 3,
+    ):
+        self._camera_index = camera_index
         self._on_turn = on_turn
+        self._max_rescans = max_rescans
+        self._classifier: Optional[ColorClassifier] = None
 
-    def read_facelets(self) -> str:  # pragma: no cover - not yet implemented
-        raise NotImplementedError(
-            "Camera scanning is not implemented yet. For now, construct "
-            "CubeState.from_facelets(...) with a facelet string directly. "
-            "The OpenCV pipeline will implement this method in the vision phase."
-        )
+    # --- Classification is injectable so it can be tested without a camera. ---
+
+    def set_classifier(self, classifier: ColorClassifier) -> None:
+        self._classifier = classifier
+
+    def classify_scan(self, faces: Dict[str, Sequence[RGB]]) -> str:
+        """Turn captured face grids into a validated facelet string.
+
+        Pure (no camera): used both by the live flow and by tests. Raises
+        ValueError with the validation errors if the scan is structurally
+        invalid.
+        """
+        if self._classifier is None:
+            raise RuntimeError("calibrate (or set_classifier) before classifying")
+        facelets = assemble_facelets(faces, self._classifier)
+        result = validate_facelets(facelets)
+        if not result.ok:
+            raise ValueError("invalid scan: " + "; ".join(result.errors))
+        return facelets
+
+    def read_facelets(self) -> str:
+        """Run the full interactive calibrate -> scan -> validate loop."""
+        from . import capture  # lazy: only import OpenCV when scanning
+
+        centers = capture.calibrate_centers(self._camera_index)
+        self._classifier = ColorClassifier.from_centers(centers)
+
+        attempts = 0
+        while True:
+            faces = capture.scan_faces(self._camera_index)
+            facelets = assemble_facelets(faces, self._classifier)
+            result = validate_facelets(facelets)
+            if result.ok:
+                return facelets
+            attempts += 1
+            print("Scan did not validate:")
+            for err in result.errors:
+                print(f"  - {err}")
+            if attempts >= self._max_rescans:
+                raise ValueError(
+                    f"scan failed to validate after {attempts} attempts; "
+                    "try better/even lighting and avoid glare on stickers"
+                )
+            print(f"Re-scanning (attempt {attempts + 1}/{self._max_rescans})...")

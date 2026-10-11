@@ -60,6 +60,30 @@ def cmd_demo_tps() -> int:
     return 0
 
 
+def cmd_scan(camera_index: int) -> int:
+    """Scan a physical cube with the webcam and print its OP trace.
+
+    Runs the full guided flow: calibrate centers -> scan 6 faces -> validate
+    -> trace. Requires OpenCV locally (pip install opencv-python numpy).
+    """
+    from vision import StaticScanner  # lazy: only needs OpenCV here
+
+    scanner = StaticScanner(camera_index=camera_index)
+    try:
+        facelets = scanner.read_facelets()
+    except ImportError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    except KeyboardInterrupt:
+        print("\nscan aborted.", file=sys.stderr)
+        return 1
+    except (RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"\nScanned facelets: {facelets}\n")
+    return cmd_trace(facelets)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Old Pochmann BLD cube tracer")
     g = p.add_mutually_exclusive_group(required=True)
@@ -68,8 +92,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="54-char facelet string (Kociemba order U R F D L B)",
     )
     g.add_argument(
+        "--scan", action="store_true",
+        help="scan a physical cube with the webcam, then trace it",
+    )
+    g.add_argument(
         "--demo-tps", action="store_true",
         help="run the TPS counter playback demo",
+    )
+    p.add_argument(
+        "--camera", type=int, default=0, metavar="INDEX",
+        help="webcam index for --scan (default 0; try 1 if you have multiple)",
     )
     return p
 
@@ -78,6 +110,8 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.demo_tps:
         return cmd_demo_tps()
+    if args.scan:
+        return cmd_scan(args.camera)
     return cmd_trace(args.facelets)
 
 

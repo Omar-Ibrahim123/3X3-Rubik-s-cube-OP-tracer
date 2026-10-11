@@ -16,9 +16,10 @@ This repository currently contains the **pure-logic core**, fully tested:
   cycle-breaking, in-place twist/flip handling, and parity detection.
 - ✅ **TPS counter** — `total turns / elapsed time`, driven by a simple
   `record_turn()` signal.
-- 🚧 **Vision** — interface boundary is defined (`vision/`). The OpenCV static
-  scanner and the future live, camera-based turn detector plug into the same
-  interfaces without changing the core.
+- ✅ **Vision (static scan)** — calibration-based color classifier + OpenCV
+  webcam capture, assembling a validated facelet string. Color logic is
+  dependency-free and unit-tested; OpenCV is only needed to run a live scan.
+  The future live turn detector plugs into the same `FaceletSource` seam.
 
 ## Architecture
 
@@ -48,7 +49,7 @@ Reference: [Speffz on the Speedsolving wiki](https://www.speedsolving.com/wiki/i
 
 ## Usage
 
-Requires Python 3.10+.
+Requires Python 3.10+. The core (trace + TPS) has **no dependencies**.
 
 ```bash
 # Trace a scramble from its facelet string (Kociemba order U R F D L B):
@@ -57,6 +58,32 @@ python -m app.main --facelets UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBB
 # TPS counter demo (playback-driven; same interface the live detector will use):
 python -m app.main --demo-tps
 ```
+
+### Scanning a real cube with your webcam
+
+The static scanner needs OpenCV + numpy (only for scanning, not the core):
+
+```bash
+pip install -r requirements-scan.txt      # opencv-python, numpy
+python -m app.main --scan                  # add --camera 1 if the wrong cam opens
+```
+
+The guided flow is:
+
+1. **Calibrate** — a window opens; show each **center** sticker (U, R, F, D, L,
+   B) when prompted and press **SPACE**. This teaches the app your cube's actual
+   colors under your lighting, which is what makes orange-vs-red reliable.
+2. **Scan** — for each face, line the face up inside the 3×3 overlay so each
+   sticker sits under a green sample box, then press **SPACE**. Keep the cube in
+   a consistent orientation as you turn it to show each face.
+3. The app classifies the colors, **validates** the result (re-prompting if a
+   scan is impossible), prints the facelet string, and then the OP trace.
+
+Controls: **SPACE/ENTER** capture · **r** redo last face · **q/ESC** quit.
+
+Tips for good scans: even, diffuse lighting; avoid glare/reflection on the
+stickers; fill the grid with the face. If a scan won't validate, it's almost
+always lighting — recalibrate under the same light you'll scan in.
 
 Example output for a scramble:
 
@@ -84,5 +111,6 @@ check and coverage invariants (`tests/test_core.py`), not just well-formedness.
 ## Roadmap
 
 1. ✅ Pure-logic core (cube model, Speffz, OP tracer, TPS counter).
-2. 🚧 Static camera scanning (OpenCV): show each face → facelet string.
+2. ✅ Static camera scanning (OpenCV): calibrate → show each face → facelet
+   string → validate → trace.
 3. ⏳ Live, camera-based turn detection feeding the TPS counter in real time.
