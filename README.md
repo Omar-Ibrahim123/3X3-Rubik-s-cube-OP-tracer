@@ -85,11 +85,14 @@ up with. It all happens in one window:
 3. **Confirm** — it prints the detected cube; press **y** to accept (or **n** to
    re-scan). Then it prints the OP trace.
 
-How detection works: each frame, the app finds vivid/bright color regions (the
-stickers), keeps the sticker-sized, roughly-square, solid ones, and groups 9 of
-them into a 3×3 face — robust to glossy/stickerless cubes with rounded stickers.
-**Hold the cube fairly close** so it fills a good part of the frame; that makes
-detection far more reliable (and crowds out a busy background).
+How detection works: each frame the app finds the individual sticker squares,
+then locates the one whose 3×3 neighbor grid is complete (the center sticker);
+its 9 neighbors are the face (adapted from Qbr — see Credits).
+
+**Hold the cube CLOSE — fill the on-screen target box.** Detection is reliable
+when the stickers are big in the frame; the app draws a corner-bracket box and
+prompts "hold the cube closer" until a face is detected (box turns green). This
+is the key to good scans.
 
 Add `--debug` to see the detection mask and candidate regions live, which helps
 if detection is struggling with your lighting.
