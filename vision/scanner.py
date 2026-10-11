@@ -83,7 +83,18 @@ class StaticScanner(FaceletSource):
         return facelets
 
     def read_facelets(self) -> str:
-        """Run the full interactive calibrate -> scan -> validate loop."""
+        """Default scan: low-friction spin-to-scan (calibrate -> spin -> confirm).
+
+        Rotate the cube slowly through all six faces; faces are auto-detected
+        by center color. See read_facelets_manual() for the press-a-key backup.
+        """
+        return self._scan(spin=True)
+
+    def read_facelets_manual(self) -> str:
+        """Backup scan: show each face and press a key (robust under bad light)."""
+        return self._scan(spin=False)
+
+    def _scan(self, spin: bool) -> str:
         from . import capture  # lazy: only import OpenCV when scanning
 
         centers = capture.calibrate_centers(self._camera_index)
@@ -91,18 +102,27 @@ class StaticScanner(FaceletSource):
 
         attempts = 0
         while True:
-            faces = capture.scan_faces(self._camera_index)
+            if spin:
+                faces = capture.spin_scan(self._classifier, self._camera_index)
+            else:
+                faces = capture.scan_faces(self._camera_index)
             facelets = assemble_facelets(faces, self._classifier)
             result = validate_facelets(facelets)
+
             if result.ok:
-                return facelets
+                # One-key confirm so a subtle misread doesn't silently trace.
+                if capture.confirm_facelets(facelets, self._classifier):
+                    return facelets
+                print("Re-scanning at your request...")
+            else:
+                print("Scan did not validate:")
+                for err in result.errors:
+                    print(f"  - {err}")
+
             attempts += 1
-            print("Scan did not validate:")
-            for err in result.errors:
-                print(f"  - {err}")
             if attempts >= self._max_rescans:
                 raise ValueError(
-                    f"scan failed to validate after {attempts} attempts; "
-                    "try better/even lighting and avoid glare on stickers"
+                    f"scan not accepted after {attempts} attempts; "
+                    "try even lighting and avoid glare on stickers"
                 )
             print(f"Re-scanning (attempt {attempts + 1}/{self._max_rescans})...")
