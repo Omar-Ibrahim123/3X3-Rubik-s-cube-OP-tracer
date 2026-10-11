@@ -6,3 +6,6 @@ __pycache__/
 venv/
 .env
 .DS_Store
+
+# Saved camera frames from --save-frame (user data, not source)
+frames/
