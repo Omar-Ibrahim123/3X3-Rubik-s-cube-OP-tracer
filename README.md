@@ -153,3 +153,12 @@ check and coverage invariants (`tests/test_core.py`), not just well-formedness.
 2. ✅ Static camera scanning (OpenCV): calibrate → show each face → facelet
    string → validate → trace.
 3. ⏳ Live, camera-based turn detection feeding the TPS counter in real time.
+
+## Credits
+
+Cube-face detection (finding the sticker squares and locating the one whose
+3×3 neighbor grid is complete) is adapted from the
+[Qbr project](https://github.com/kkoomen/qbr) by Kim Koomen, used under the MIT
+License. The adaptation lives in `vision/detect.py`
+(`find_cube_by_neighbors`, `is_sticker_square`) and `vision/capture.py`
+(`_find_sticker_boxes`).

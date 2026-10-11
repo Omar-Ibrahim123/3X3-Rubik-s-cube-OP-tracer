@@ -99,6 +99,74 @@ def trimmed_median_color(
     return tuple(out)
 
 
+def find_cube_by_neighbors(squares):
+    """Find a 3x3 cube face among candidate sticker squares; return 9 ordered.
+
+    Adapted from the Qbr project (MIT, (c) 2016 Kim Koomen,
+    https://github.com/kkoomen/qbr): rather than hunting for the cube as one big
+    region (which proved fragile), find small sticker-sized squares, then locate
+    the one that has exactly 9 neighbors arranged in a 3x3 grid around it (the
+    center sticker). Those 9 neighbors ARE the cube face. Random background
+    squares won't form a 3x3 grid, so this rejects clutter naturally.
+
+    `squares` is a list of (x, y, w, h) axis-aligned sticker boxes. Returns the
+    9 boxes sorted in reading order (top-left to bottom-right), or None.
+    """
+    if len(squares) < 9:
+        return None
+
+    radius = 1.5  # neighbor slots sit at +/- 1.5 * sticker size from a center
+
+    def neighbors_of(cx, cy, w, h):
+        return [
+            (cx - w * radius, cy - h * radius), (cx, cy - h * radius),
+            (cx + w * radius, cy - h * radius), (cx - w * radius, cy),
+            (cx, cy), (cx + w * radius, cy),
+            (cx - w * radius, cy + h * radius), (cx, cy + h * radius),
+            (cx + w * radius, cy + h * radius),
+        ]
+
+    for (x, y, w, h) in squares:
+        cx, cy = x + w / 2.0, y + h / 2.0
+        slots = neighbors_of(cx, cy, w, h)
+        matched = []
+        for (x2, y2, w2, h2) in squares:
+            for (sx, sy) in slots:
+                # slot center falls inside this square's box?
+                if x2 < sx and y2 < sy and x2 + w2 > sx and y2 + h2 > sy:
+                    matched.append((x2, y2, w2, h2))
+                    break
+        if len(matched) == 9:
+            # Sort into reading order: by y, then split into 3 rows by x.
+            ys = sorted(matched, key=lambda b: b[1])
+            rows = [
+                sorted(ys[0:3], key=lambda b: b[0]),
+                sorted(ys[3:6], key=lambda b: b[0]),
+                sorted(ys[6:9], key=lambda b: b[0]),
+            ]
+            return rows[0] + rows[1] + rows[2]
+    return None
+
+
+def is_sticker_square(w, h, area, min_w=20, max_w=120):
+    """Qbr-style sticker filter: near-square box, sticker-sized, well-filled.
+
+    Pure, testable. `area` is the contour area; w,h the bounding box. Width
+    bounds are wider than Qbr's fixed 30-60px so a cube held at varying
+    distance still works.
+    """
+    if h <= 0 or w <= 0:
+        return False
+    ratio = w / float(h)
+    if not (0.8 <= ratio <= 1.2):
+        return False
+    if not (min_w <= w <= max_w):
+        return False
+    if area / float(w * h) <= 0.4:
+        return False
+    return True
+
+
 def score_face_candidate_debug(
     rcx: float, rcy: float, rw: float, rh: float, extent: float,
     frame_w: float, frame_h: float,
