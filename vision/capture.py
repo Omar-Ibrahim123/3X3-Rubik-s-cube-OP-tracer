@@ -212,7 +212,7 @@ def analyze_dir(folder: str):
             # Diagnostic: show the top contours by area and why each was
             # rejected, so detection can be tuned against reality.
             print(f"  {name}: NOT detected")
-            mask = _cube_edge_mask(frame)[0]
+            mask, edges = _cube_edge_mask(frame)
             contours, _ = cv2.findContours(
                 mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
             )
@@ -228,10 +228,15 @@ def analyze_dir(folder: str):
                 _, reason = score_face_candidate_debug(
                     rcx, rcy, rw, rh, extent, float(w), float(h)
                 )
+                bx, by, bbw, bbh = cv2.boundingRect(c)
+                sub = edges[max(0, by):by + bbh, max(0, bx):bx + bbw]
+                dens = float((sub > 0).sum()) / sub.size if sub.size else 0.0
                 szpct = 100.0 * ((rw + rh) / 2.0) / w
+                if not reason and dens < 0.08:
+                    reason = f"edge-density {dens:.2f} < 0.08 (sparse: not a cube)"
                 print(f"      contour: size={szpct:.0f}%w "
                       f"aspect={max(rw,rh)/min(rw,rh):.2f} extent={extent:.2f} "
-                      f"center=({rcx:.0f},{rcy:.0f}) -> "
+                      f"density={dens:.2f} center=({rcx:.0f},{rcy:.0f}) -> "
                       f"{reason or 'ACCEPTED?'}")
 
         disp = frame.copy()
@@ -265,24 +270,26 @@ def _cube_edge_mask(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
     edges = cv2.Canny(gray, 50, 150)
-    # Bridge the sticker-border lattice into a filled blob -- but modestly, so
-    # the cube does NOT merge with nearby face/hair/poster detail into one giant
-    # region (that caused far-away false positives covering the whole head).
-    k = max(5, int(round(min(h, w) * 0.025)) | 1)
+    # Bridge the sticker-border lattice into a filled blob, then CONVEX-HULL
+    # each sizable contour so the cube becomes a solid square (high extent ->
+    # detectable). Hulling can over-grow to include nearby face/hair detail;
+    # that is handled downstream by the EDGE-DENSITY check in _find_cube_face
+    # (a real close cube is dense throughout; a cube+face+wall blob is sparse).
+    k = max(7, int(round(min(h, w) * 0.045)) | 1)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
     mask = cv2.dilate(edges, kernel, iterations=1)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
-    # Erode back to undo the dilation's growth and snap thin bridges to other
-    # detail, leaving the cube as its own compact blob.
-    mask = cv2.erode(mask, kernel, iterations=1)
-    # Fill interior holes (the lattice gaps) so the blob is solid, WITHOUT a
-    # convex hull (hulling tended to swallow neighbouring detail).
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
     contours, _ = cv2.findContours(
         mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
-    if contours:
-        cv2.drawContours(mask, contours, -1, 255, thickness=cv2.FILLED)
-    return mask, edges
+    out = np.zeros_like(mask)
+    frame_area = float(h * w)
+    for c in contours:
+        if cv2.contourArea(c) < frame_area * 0.01:
+            continue
+        hull = cv2.convexHull(c)
+        cv2.drawContours(out, [hull], -1, 255, thickness=cv2.FILLED)
+    return out, edges
 
 
 def _sticker_mask(frame):
@@ -350,11 +357,12 @@ def _find_cube_face(frame, min_frac=0.02, max_frac=0.75):
             continue
         extent = a / (rw * rh)
         s = score_face_candidate(rcx, rcy, rw, rh, extent, float(w), float(h))
-        if s <= 0 or s <= best_score:
+        if s <= 0:
             continue
-        # Validate by EDGE DENSITY inside the candidate box: a real cube is
-        # uniformly packed with edges; a far-away false positive that spans the
-        # head/wall is mostly empty. This rejects the 'cube+face+wall' blobs.
+        # Validate by EDGE DENSITY inside the candidate box FIRST (before the
+        # best-score comparison), so a sparse false positive can't preempt a
+        # real but lower-scoring cube. A real close cube is uniformly packed
+        # with edges; a far 'cube+face+wall' blob is mostly empty.
         x, y, bw, bh = cv2.boundingRect(c)
         x0, y0 = max(0, x), max(0, y)
         x1, y1 = min(w, x + bw), min(h, y + bh)
@@ -362,7 +370,9 @@ def _find_cube_face(frame, min_frac=0.02, max_frac=0.75):
         if sub.size == 0:
             continue
         density = float((sub > 0).sum()) / sub.size
-        if density < 0.06:  # too sparse to be a detail-packed cube face
+        if density < 0.08:  # too sparse to be a detail-packed cube face
+            continue
+        if s <= best_score:
             continue
         best_score = s
         size = (rw + rh) / 2.0
