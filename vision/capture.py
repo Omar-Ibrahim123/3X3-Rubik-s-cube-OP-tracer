@@ -840,6 +840,29 @@ def spin_scan_session(
     return classifier, collector.faces()
 
 
+def _draw_closer_guide(frame, detected):
+    """Draw a centered target box showing how big the cube should appear.
+
+    Detection is reliable only when the cube is held CLOSE enough that its
+    stickers are big. This box is the 'aim for roughly this size' guide: fill it
+    with the cube face. Green once a face is detected, amber otherwise.
+    """
+    cv2, _ = _lazy_imports()
+    h, w = frame.shape[:2]
+    side = int(min(h, w) * 0.55)
+    cx, cy = w // 2, h // 2
+    x0, y0 = cx - side // 2, cy - side // 2
+    x1, y1 = cx + side // 2, cy + side // 2
+    color = (0, 220, 0) if detected else (0, 200, 255)
+    # Draw as corner brackets so it reads as a target, not a sampling grid.
+    L = side // 5
+    for (px, py, dx, dy) in [
+        (x0, y0, 1, 1), (x1, y0, -1, 1), (x0, y1, 1, -1), (x1, y1, -1, -1),
+    ]:
+        cv2.line(frame, (px, py), (px + dx * L, py), color, 2)
+        cv2.line(frame, (px, py), (px, py + dy * L), color, 2)
+
+
 def _draw_detection(frame, centers, classifier=None, debug=False):
     """Draw the 9 detected sticker centers (and classified colors in debug)."""
     cv2, _ = _lazy_imports()
@@ -913,11 +936,16 @@ def spin_scan_auto(
 
             if classifier is None:
                 # ---- Phase A: white calibration via detection ----
+                _draw_closer_guide(disp, detected)
                 msg = ("WHITE face detected - press SPACE" if detected
-                       else "Show WHITE face CLOSE to camera...")
+                       else "Show the WHITE face, filling the box")
                 color = (0, 220, 0) if detected else (0, 200, 255)
                 cv2.putText(disp, msg, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
                             color, 2, cv2.LINE_AA)
+                if not detected:
+                    cv2.putText(disp, "-> hold the cube CLOSER to the camera",
+                                (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                                (0, 200, 255), 2, cv2.LINE_AA)
                 if detected:
                     _draw_detection(disp, centers)
                 cv2.putText(disp, "q/ESC = quit", (20, disp.shape[0] - 20),
@@ -976,9 +1004,10 @@ def spin_scan_auto(
                             col, 2, cv2.LINE_AA)
                 x0 += 26
             if not detected:
-                cv2.putText(disp, "(no face detected - adjust angle/lighting)",
-                            (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
-                            (0, 170, 255), 1, cv2.LINE_AA)
+                _draw_closer_guide(disp, False)
+                cv2.putText(disp, "-> hold the cube CLOSER, filling the box",
+                            (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                            (0, 200, 255), 2, cv2.LINE_AA)
             if just_got:
                 cv2.putText(disp, f"captured {just_got}!",
                             (20, disp.shape[0] - 50), cv2.FONT_HERSHEY_SIMPLEX,
