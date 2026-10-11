@@ -14,6 +14,7 @@ import math
 from vision.detect import (
     Square,
     detect_face_grid,
+    dominant_color,
     filter_similar_squares,
     find_cube_by_neighbors,
     is_sticker_blob,
@@ -228,6 +229,27 @@ def test_trimmed_median_ignores_glare():
 
 def test_trimmed_median_empty():
     assert trimmed_median_color([]) == (0.0, 0.0, 0.0)
+
+
+# --------------------------- dominant_color ---------------------------
+
+def test_dominant_color_ignores_center_logo():
+    # 65% white sticker + 35% blue logo -> dominant should be white.
+    white = [(158.0, 184.0, 233.0)] * 65
+    blue_logo = [(20.0, 110.0, 220.0)] * 35
+    r, g, b = dominant_color(white + blue_logo)
+    assert r > 120 and g > 150 and b > 200  # white-ish, not the blue logo
+    # And clearly not the blue logo color.
+    assert not (r < 60 and b > 180)
+
+
+def test_dominant_color_pure_patch():
+    r, g, b = dominant_color([(200.0, 50.0, 40.0)] * 40)
+    assert abs(r - 200) < 48 and abs(g - 50) < 48 and abs(b - 40) < 48
+
+
+def test_dominant_color_empty():
+    assert dominant_color([]) == (0.0, 0.0, 0.0)
 
 
 # A 640x480 frame for area-fraction tests.

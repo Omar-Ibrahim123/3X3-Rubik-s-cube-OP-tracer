@@ -29,6 +29,28 @@ class Square:
     size: float  # side length in pixels (approx)
 
 
+def dominant_color(
+    pixels: Sequence[Tuple[float, float, float]], bin_size: int = 48
+) -> Tuple[float, float, float]:
+    """Return the most common color of a patch by coarse-bin majority vote.
+
+    For a CENTER sticker with a printed logo (a colored blob in the middle),
+    the sticker's true color is the MAJORITY of the patch and the logo is a
+    minority. Quantize pixels into coarse RGB bins, find the most populated bin,
+    and return the average of the pixels in it -- so a central logo (or glare)
+    that is a minority of the area is ignored. Channel order in = order out.
+    """
+    if not pixels:
+        return (0.0, 0.0, 0.0)
+    buckets = {}
+    for p in pixels:
+        key = (int(p[0]) // bin_size, int(p[1]) // bin_size, int(p[2]) // bin_size)
+        buckets.setdefault(key, []).append(p)
+    best = max(buckets.values(), key=len)
+    n = len(best)
+    return tuple(sum(p[ch] for p in best) / n for ch in range(3))
+
+
 def pick_white_reference(
     samples: Sequence[Tuple[float, float, float]],
 ) -> Tuple[float, float, float]:

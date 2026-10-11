@@ -464,6 +464,44 @@ def _sample_cell(frame, center: Tuple[int, int], half: int) -> RGB:
     return trimmed_median_color(rgb_pixels)
 
 
+def _sample_center_sticker(frame, center, half):
+    """Sample the CENTER sticker robustly against a printed logo.
+
+    Many cubes (e.g. GAN) print a logo on one center sticker; if that logo is a
+    saturated color (blue), sampling the dead center misreads the whole face.
+    We sample a slightly larger patch and return the DOMINANT color (majority
+    vote), so the sticker's true color wins over the minority logo pixels.
+    """
+    _, np = _lazy_imports()
+    from .detect import dominant_color
+
+    fh, fw = frame.shape[:2]
+    x, y = int(round(center[0])), int(round(center[1]))
+    half = max(2, int(round(half * 1.1)))
+    x0, x1 = max(0, x - half), min(fw, x + half)
+    y0, y1 = max(0, y - half), min(fh, y + half)
+    patch = frame[y0:y1, x0:x1]
+    if patch.size == 0:
+        return (0.0, 0.0, 0.0)
+    pix = patch.reshape(-1, 3)
+    if len(pix) > 600:
+        step = len(pix) // 600
+        pix = pix[::step]
+    rgb_pixels = [(float(p[2]), float(p[1]), float(p[0])) for p in pix]
+    return dominant_color(rgb_pixels)
+
+
+def _sample_face(frame, centers, patch_half):
+    """Sample all 9 stickers; the center (index 4) uses logo-robust sampling."""
+    samples = []
+    for i, c in enumerate(centers):
+        if i == 4:
+            samples.append(_sample_center_sticker(frame, c, patch_half))
+        else:
+            samples.append(_sample_cell(frame, c, patch_half))
+    return samples
+
+
 def _draw_overlay(frame, cell_centers, box, half, prompt, captured_colors=None):
     cv2, _ = _lazy_imports()
     h, w = frame.shape[:2]
@@ -958,7 +996,7 @@ def spin_scan_auto(
                     # scrambled white face only the center is guaranteed white,
                     # so we must NOT median all 9 (that mixes random colors).
                     from .detect import pick_white_reference
-                    samples = [_sample_cell(frame, c, patch_half) for c in centers]
+                    samples = _sample_face(frame, centers, patch_half)
                     white = pick_white_reference(samples)
                     classifier = ColorClassifier.from_white_anchor(white)
                     collector = SpinCollector(
@@ -973,7 +1011,7 @@ def spin_scan_auto(
 
             # ---- Phase B: spin collection via detection ----
             if detected:
-                samples = [_sample_cell(frame, c, patch_half) for c in centers]
+                samples = _sample_face(frame, centers, patch_half)
                 got = collector.offer(FaceCandidate(samples=samples))
                 if got:
                     just_got = got
