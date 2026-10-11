@@ -16,10 +16,12 @@ This repository currently contains the **pure-logic core**, fully tested:
   cycle-breaking, in-place twist/flip handling, and parity detection.
 - ✅ **TPS counter** — `total turns / elapsed time`, driven by a simple
   `record_turn()` signal.
-- ✅ **Vision (static scan)** — calibration-based color classifier + OpenCV
-  webcam capture, assembling a validated facelet string. Color logic is
-  dependency-free and unit-tested; OpenCV is only needed to run a live scan.
-  The future live turn detector plugs into the same `FaceletSource` seam.
+- ✅ **Vision (static scan)** — automatic cube-face detection (finds the 9
+  sticker squares and orders them into a 3×3 grid) feeding a white-balanced
+  HSV color classifier, assembling a validated facelet string. Detection and
+  color logic are dependency-free and unit-tested; OpenCV is only needed to run
+  a live scan. Fixed-box and manual flows remain as fallbacks. The future live
+  turn detector plugs into the same `FaceletSource` seam.
 
 ## Architecture
 
@@ -71,20 +73,30 @@ python -m app.main --scan                  # add --camera 1 if the wrong cam ope
 **Default: spin-to-scan (low friction).** Assumes a standard **BOY/Western**
 color scheme (white opposite yellow, green opposite blue, red opposite orange).
 
-It all happens in **one window** — no window switch between steps:
+The cube face is **detected automatically** — there's no box to line the cube
+up with. It all happens in one window:
 
-1. **Show white** — show the **white** face once and press **SPACE**. That
-   single sample anchors the built-in standard-scheme colors to your lighting
-   (so orange/red stay reliable). No six-sticker calibration.
-2. **Spin** — in the same window, slowly rotate the cube so each face passes
-   square-on through the 3×3 overlay. The app **auto-detects each face by its
-   center color** and captures it once held steady. The progress bar lights up
-   U R F D L B as they're collected — no key presses.
+1. **Show white** — hold the **white** face toward the camera until it's
+   detected (its 9 stickers get circled), then press **SPACE**. That single
+   sample anchors the standard-scheme colors to your lighting.
+2. **Spin** — slowly rotate the cube; each face is detected and captured
+   automatically once held steady. The progress bar lights up U R F D L B as
+   they're collected — no key presses, no alignment.
 3. **Confirm** — it prints the detected cube; press **y** to accept (or **n** to
    re-scan). Then it prints the OP trace.
 
-**Diagnosing color issues:** add `--debug` to label each sticker live with the
-color it's being classified as, and print the raw RGB samples per face:
+How detection works: each frame, the app finds the square sticker contours and
+groups 9 of them into a 3×3 face, so color samples always land on the stickers.
+
+**Fallbacks** if auto-detection struggles with your lighting/background:
+
+```bash
+python -m app.main --scan-box      # fixed 3x3 box you size with +/- keys
+python -m app.main --scan-manual   # show each face and press SPACE
+```
+
+**Diagnosing color issues:** add `--debug` to any scan to label each sticker
+live with its detected color and print the raw RGB samples per face:
 
 ```bash
 python -m app.main --scan --debug
