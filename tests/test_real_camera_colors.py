@@ -45,3 +45,30 @@ def test_real_yellow_not_confused_with_white_or_orange():
     clf = ColorClassifier.from_white_anchor(REAL_WHITE)
     assert clf.classify(REAL_CENTERS["D"]) == "D"
     assert clf.classify(REAL_CENTERS["D"]) not in ("U", "L")
+
+
+# A second real session (stronger blue-cast lighting) where GREEN was being
+# misread as WHITE. All six centers, including green, must classify correctly.
+REAL_WHITE_2 = (160, 187, 237)
+REAL_CENTERS_2 = {
+    "U": (160, 187, 237),   # white
+    "F": (108, 170, 148),   # green  <- was collapsing onto white
+    "D": (195, 216, 150),   # yellow
+    "B": (0, 103, 223),     # blue
+    "R": (159, 70, 103),    # red
+    "L": (188, 104, 47),    # orange
+}
+
+
+def test_real_green_not_misread_as_white():
+    clf = ColorClassifier.from_white_anchor(REAL_WHITE_2)
+    assert clf.classify(REAL_CENTERS_2["F"]) == "F"
+    assert clf.classify(REAL_CENTERS_2["F"]) != "U"
+
+
+def test_real_second_session_all_centers():
+    clf = ColorClassifier.from_white_anchor(REAL_WHITE_2)
+    for face, rgb in REAL_CENTERS_2.items():
+        assert clf.classify(rgb) == face, (
+            f"{face} center {rgb} misclassified as {clf.classify(rgb)}"
+        )
