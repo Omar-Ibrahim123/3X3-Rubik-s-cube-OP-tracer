@@ -29,6 +29,35 @@ class Square:
     size: float  # side length in pixels (approx)
 
 
+def pick_white_reference(
+    samples: Sequence[Tuple[float, float, float]],
+) -> Tuple[float, float, float]:
+    """Pick the best 'white' from a face's 9 sticker samples.
+
+    During white calibration the user shows the white face, but on a SCRAMBLED
+    cube only the CENTER is guaranteed white -- the other 8 are random colors.
+    So we must not just average/median the 9. A white sticker is the one that is
+    BRIGHT and NEUTRAL (low saturation: its channels are close together). We
+    score each sample by brightness minus a penalty for channel spread, and
+    return the best. Robust to a center logo too, since samples are already
+    trimmed-median per cell.
+
+    Channel order in = channel order out.
+    """
+    if not samples:
+        return (255.0, 255.0, 255.0)
+    best = None
+    best_score = float("-inf")
+    for s in samples:
+        brightness = sum(s) / 3.0
+        spread = max(s) - min(s)  # 0 for perfect grey/white
+        score = brightness - 1.5 * spread
+        if score > best_score:
+            best_score = score
+            best = s
+    return tuple(best)
+
+
 def trimmed_median_color(
     pixels: Sequence[Tuple[float, float, float]],
     drop_dark: float = 0.25,
@@ -62,7 +91,7 @@ def trimmed_median_color(
 
 
 def subdivide_face(
-    cx: float, cy: float, size: float, angle: float = 0.0
+    cx: float, cy: float, size: float, angle: float = 0.0, inset: float = 0.80
 ) -> List[Tuple[float, float]]:
     """Given a cube FACE square, return its 9 sticker-cell centers.
 
@@ -71,12 +100,16 @@ def subdivide_face(
     it into a 3x3 grid. `(cx, cy)` is the face center, `size` the full face side
     length, `angle` an optional rotation (radians) for a tilted cube.
 
-    Returns 9 (x, y) centers in reading order (row-major, top-left first). Cell
-    centers sit at +/- size/3 from the face center along the (rotated) axes.
+    `inset` (0..1) pulls the outer cells INWARD toward the face center so sample
+    points stay well inside each sticker and away from the dark gaps / cube
+    edge, even if the detected square slightly overshoots the cube. The step for
+    the outer ring is (size/3)*inset; the center cell is always the face center.
+
+    Returns 9 (x, y) centers in reading order (row-major, top-left first).
     """
     import math
 
-    step = size / 3.0
+    step = (size / 3.0) * inset
     ca, sa = math.cos(angle), math.sin(angle)
     centers: List[Tuple[float, float]] = []
     for row in (-1, 0, 1):
