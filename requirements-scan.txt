@@ -1,0 +1,5 @@
+# Dependencies for the webcam static scanner (`python -m app.main --scan`).
+# Install these locally on the machine that has your camera:
+#     pip install -r requirements-scan.txt
+opencv-python>=4.8
+numpy>=1.24

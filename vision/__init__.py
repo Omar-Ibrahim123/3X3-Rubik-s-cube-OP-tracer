@@ -6,10 +6,24 @@ be added alongside the static scanner without changing anything downstream:
 both ultimately feed the same facelet-string / turn-signal interfaces that the
 cube model, solver, and TPS counter already consume.
 
-Implementation of the actual OpenCV pipeline is intentionally deferred; this
-package currently defines the interface boundary only.
+Only the pure color-classification logic (colors.py) and the scanner's
+orchestration import at package load. OpenCV (capture.py) is imported lazily
+so this package and the test suite work without OpenCV installed.
 """
 
+from .colors import (
+    ColorClassifier,
+    ValidationResult,
+    assemble_facelets,
+    validate_facelets,
+)
 from .scanner import FaceletSource, StaticScanner
 
-__all__ = ["FaceletSource", "StaticScanner"]
+__all__ = [
+    "FaceletSource",
+    "StaticScanner",
+    "ColorClassifier",
+    "ValidationResult",
+    "assemble_facelets",
+    "validate_facelets",
+]
