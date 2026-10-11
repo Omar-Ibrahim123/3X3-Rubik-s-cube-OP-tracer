@@ -42,13 +42,24 @@ def test_pick_white_from_scrambled_face():
 
 
 def test_pick_white_prefers_neutral_over_bright_colored():
-    # A very bright yellow (high brightness) must NOT beat a slightly dimmer
-    # neutral white, because yellow has large channel spread.
+    # A very bright yellow (high saturation) must NOT beat a slightly dimmer
+    # neutral white.
     samples = [
-        (250.0, 250.0, 40.0),   # bright yellow (big spread)
+        (250.0, 250.0, 40.0),   # bright yellow (vivid)
         (225.0, 228.0, 223.0),  # white (neutral)
     ]
     assert pick_white_reference(samples) == (225.0, 228.0, 223.0)
+
+
+def test_pick_white_picks_bright_white_despite_mild_cast():
+    # Real captured data: a bright but slightly blue-cast white center must be
+    # chosen over dim flat-grey cells (regression for the muddy-white bug).
+    samples = [
+        (172.0, 163.0, 163.0), (154.0, 141.0, 154.0), (167.0, 156.0, 156.0),
+        (145.0, 125.0, 149.0), (206.0, 231.0, 255.0), (167.0, 156.0, 153.0),
+        (51.0, 41.0, 44.0), (26.0, 54.0, 120.0), (27.0, 55.0, 120.0),
+    ]
+    assert pick_white_reference(samples) == (206.0, 231.0, 255.0)
 
 
 def test_pick_white_empty():

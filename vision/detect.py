@@ -46,16 +46,25 @@ def pick_white_reference(
     """
     if not samples:
         return (255.0, 255.0, 255.0)
+    # Score mostly by BRIGHTNESS, lightly penalizing RELATIVE color (saturation)
+    # so a bright white with a mild lighting cast (e.g. slightly blue) still
+    # beats a dim flat grey. We only strongly avoid vividly colored cells.
+    #   saturation = spread / brightness  (0 = neutral, ~1 = vivid)
+    # White stickers are bright AND low-saturation; colored stickers are vivid.
     best = None
     best_score = float("-inf")
     for s in samples:
         brightness = sum(s) / 3.0
-        spread = max(s) - min(s)  # 0 for perfect grey/white
-        score = brightness - 1.5 * spread
+        if brightness <= 0:
+            continue
+        spread = max(s) - min(s)
+        saturation = spread / brightness
+        # Brightness dominates; subtract a brightness-scaled saturation penalty.
+        score = brightness * (1.0 - 1.2 * saturation)
         if score > best_score:
             best_score = score
             best = s
-    return tuple(best)
+    return tuple(best) if best is not None else (255.0, 255.0, 255.0)
 
 
 def trimmed_median_color(
@@ -91,7 +100,7 @@ def trimmed_median_color(
 
 
 def subdivide_face(
-    cx: float, cy: float, size: float, angle: float = 0.0, inset: float = 0.80
+    cx: float, cy: float, size: float, angle: float = 0.0, inset: float = 0.72
 ) -> List[Tuple[float, float]]:
     """Given a cube FACE square, return its 9 sticker-cell centers.
 
