@@ -40,12 +40,13 @@ class StaticScanner(FaceletSource):
     """Scan a stationary cube face-by-face via a webcam.
 
     Flow when read_facelets() is called:
-      1. Calibrate: show each center sticker once so classification is tuned
-         to your cube under your lighting.
-      2. Scan: show all six faces with the 3x3 overlay; sample 9 colors each.
+      1. In one continuous camera/window session, show six distinct labeled
+         centers (U/R/F/D/L/B) to learn a CIEDE2000 palette. Calibration waits
+         for a real face transition and rejects duplicate colors.
+      2. Without reopening the camera, spin through all six faces; sample nine
+         colors from each detected 3x3 sticker grid.
       3. Classify + assemble into a 54-char facelet string.
-      4. Validate; if invalid, report the errors and (unless disabled) let you
-         re-scan rather than feeding garbage to the solver.
+      4. Validate; if invalid, report the errors and let the user re-scan.
 
     `on_turn` is accepted now (unused for static scanning) so the same object
     shape can later drive a TPS counter when live detection is added.
@@ -85,12 +86,7 @@ class StaticScanner(FaceletSource):
         return facelets
 
     def read_facelets(self) -> str:
-        """Default scan: automatic face detection (no box) -> spin -> confirm.
-
-        Hold the white face up until detected, then rotate the cube slowly
-        through all six faces; each is auto-detected and captured. See the
-        other read_facelets_* methods for the box and manual fallbacks.
-        """
+        """Default: one-window six-color calibration -> spin -> confirm."""
         return self._scan(mode="auto")
 
     def read_facelets_box(self) -> str:
@@ -107,14 +103,15 @@ class StaticScanner(FaceletSource):
         attempts = 0
         while True:
             if mode == "auto":
-                # Qbr-style: first CALIBRATE by showing all six faces (learn the
-                # user's real colors), then spin-scan classifying by perceptual
-                # (CIEDE2000) nearest match to those learned colors.
-                palette = capture.calibrate_palette(self._camera_index)
-                self._classifier = ColorClassifier.from_palette(palette)
-                _, faces = capture.spin_scan_auto(
-                    camera_index=self._camera_index, debug=self._debug,
-                    classifier=self._classifier,
+                # One uninterrupted camera/window state machine: calibrate six
+                # distinct centers, build the CIEDE2000 palette, then scan.
+                # Keeping one camera handle also keeps exposure/white-balance
+                # consistent between calibration and classification.
+                from .session import calibrate_and_spin
+
+                self._classifier, faces = calibrate_and_spin(
+                    camera_index=self._camera_index,
+                    debug=self._debug,
                 )
             elif mode == "box":
                 # Fixed box the user sizes with +/- (previous default).

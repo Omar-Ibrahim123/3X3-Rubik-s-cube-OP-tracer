@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
-from .colors import FACE_NAMES, RGB, ColorClassifier, color_distance
+from .colors import FACE_NAMES, RGB, ColorClassifier
 
 
 @dataclass
@@ -97,10 +97,15 @@ class SpinCollector:
         face = self.classifier.classify(center)
 
         # Is this the same face, held roughly as still, as the running streak?
+        # Use the classifier's own metric: CIEDE2000 for a calibrated palette,
+        # legacy HSV otherwise. Their scales differ, so use an appropriate
+        # threshold for each.
+        stable_limit = 5.0 if self.classifier.perceptual else self.steady_dist
         same_as_streak = (
             self._streak_face == face
             and self._streak_center is not None
-            and color_distance(center, self._streak_center) <= self.steady_dist
+            and self.classifier.distance(center, self._streak_center)
+            <= stable_limit
         )
         if same_as_streak:
             self._streak_count += 1

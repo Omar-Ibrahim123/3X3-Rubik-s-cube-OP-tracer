@@ -73,14 +73,18 @@ python -m app.main --scan                  # add --camera 1 if the wrong cam ope
 **Default: spin-to-scan (low friction).** Assumes a standard **BOY/Western**
 color scheme (white opposite yellow, green opposite blue, red opposite orange).
 
-The cube face is **detected automatically** — there's no box to line the cube
-up with. The scan has two steps:
+The cube face is **detected automatically** — there's no sampling grid to line
+up manually. Calibration and scanning run in **one continuous camera window**
+with one camera session, so exposure and white balance do not change between
+phases:
 
 1. **Calibrate** — show each face when prompted (U white, R red, F green,
-   D yellow, L orange, B blue), filling the on-screen box; each is captured
-   automatically when steady. This learns your cube's **real** colors.
-2. **Spin** — slowly rotate the cube through all six faces; each is detected and
-   captured once held steady. The progress bar lights up U R F D L B.
+   D yellow, L orange, B blue), filling the target box; each is captured when
+   steady. After a capture, turn to the next requested face. The app refuses to
+   reuse the same center under a second label and rejects near-duplicate palette
+   colors. This learns your cube's **real** colors.
+2. **Spin** — without switching windows, slowly rotate the cube through all six
+   faces; each is detected and captured once held steady.
 3. **Confirm** — it prints the detected cube; press **y** to accept (or **n** to
    re-scan). Then it prints the OP trace.
 

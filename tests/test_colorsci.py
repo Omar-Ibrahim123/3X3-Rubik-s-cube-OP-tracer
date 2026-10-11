@@ -36,7 +36,7 @@ def test_red_orange_well_separated():
 # --- Palette classification on the user's REAL captured colors ---
 
 REAL_PALETTE = {
-    "U": (182, 200, 140),
+    "U": (170, 213, 255),
     "F": (87, 149, 134),
     "D": (188, 206, 139),
     "B": (0, 83, 199),
@@ -69,3 +69,10 @@ def test_palette_classifies_all_real_samples():
 def test_palette_requires_all_six():
     with pytest.raises(ValueError):
         ColorClassifier.from_palette({"U": (1, 2, 3)})
+
+
+def test_palette_rejects_mislabeled_near_duplicate_centers():
+    corrupt = dict(REAL_PALETTE)
+    corrupt["R"] = corrupt["B"]  # same held face accidentally reused
+    with pytest.raises(ValueError, match="not distinct"):
+        ColorClassifier.from_palette(corrupt)
