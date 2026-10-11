@@ -180,53 +180,154 @@ def trimmed_median_color(
     return tuple(out)
 
 
-def find_cube_by_neighbors(squares):
+def find_cube_by_neighbors(squares, min_matches: int = 7):
     """Find a 3x3 cube face among candidate sticker squares; return 9 ordered.
 
     Adapted from the Qbr project (MIT, (c) 2016 Kim Koomen,
     https://github.com/kkoomen/qbr): rather than hunting for the cube as one big
     region (which proved fragile), find small sticker-sized squares, then locate
-    the one that has exactly 9 neighbors arranged in a 3x3 grid around it (the
-    center sticker). Those 9 neighbors ARE the cube face. Random background
-    squares won't form a 3x3 grid, so this rejects clutter naturally.
+    the one whose 3x3 neighbor grid is populated by other squares (the center
+    sticker). Those neighbors ARE the cube face. Random background squares won't
+    form a 3x3 grid, so this rejects clutter naturally.
+
+    MISSING-STICKER RECONSTRUCTION: on real cubes some stickers routinely fail
+    to form a clean square contour -- most often the CENTER sticker, whose
+    printed logo breaks its outline (confirmed on the user's GAN cube: the 8
+    outer stickers detect perfectly, the logo'd center does not). The lattice is
+    rigid, so a hole is fully determined by the squares that WERE found. Instead
+    of requiring all 9 slots filled, we accept a candidate once at least
+    `min_matches` of its 9 slots are occupied (default 7 => up to 2 missing),
+    and SYNTHESIZE any empty slot at its ideal lattice position using the median
+    size of the found squares. We pick the candidate whose grid is most complete
+    (ties broken by tightest fit), which also recovers frames where 9 squares
+    were found but one was slightly misaligned.
 
     `squares` is a list of (x, y, w, h) axis-aligned sticker boxes. Returns the
-    9 boxes sorted in reading order (top-left to bottom-right), or None.
+    9 boxes in reading order (top-left to bottom-right), real where detected and
+    inferred where missing, or None if no good lattice is found.
     """
-    if len(squares) < 9:
+    if len(squares) < min_matches:
         return None
 
-    radius = 1.5  # neighbor slots sit at +/- 1.5 * sticker size from a center
+    # Lattice spacing between adjacent sticker CENTERS, MEASURED from the data
+    # rather than assumed from sticker size (the gap between stickers varies by
+    # cube, so size*constant is unreliable). For each square, take the distance
+    # to its nearest other square; adjacent stickers dominate, so the median of
+    # those nearest-neighbour distances is the true grid pitch. This is what
+    # lets a projected slot land squarely on a real sticker and makes the
+    # missing-sticker reconstruction geometrically correct.
+    centers = [(x + w / 2.0, y + h / 2.0) for (x, y, w, h) in squares]
+    nn = []
+    for i, (cx, cy) in enumerate(centers):
+        dmin = None
+        for j, (ox, oy) in enumerate(centers):
+            if i == j:
+                continue
+            d = ((cx - ox) ** 2 + (cy - oy) ** 2) ** 0.5
+            if dmin is None or d < dmin:
+                dmin = d
+        if dmin is not None:
+            nn.append(dmin)
+    spacing = _median(nn) if nn else 0.0
 
-    def neighbors_of(cx, cy, w, h):
+    def slots_from_anchor(acx, acy, grid_row, grid_col):
+        """9 ideal slot centers if the anchor sits at (grid_row, grid_col).
+
+        grid_row/col in {0,1,2}; the lattice origin (top-left slot center) is
+        derived by stepping back from the anchor, then all 9 centers are laid
+        out in reading order.
+        """
+        ox = acx - grid_col * spacing
+        oy = acy - grid_row * spacing
         return [
-            (cx - w * radius, cy - h * radius), (cx, cy - h * radius),
-            (cx + w * radius, cy - h * radius), (cx - w * radius, cy),
-            (cx, cy), (cx + w * radius, cy),
-            (cx - w * radius, cy + h * radius), (cx, cy + h * radius),
-            (cx + w * radius, cy + h * radius),
+            (ox + c * spacing, oy + r * spacing)
+            for r in range(3) for c in range(3)
         ]
 
+    # A slot is filled by the detected square whose CENTER is nearest the slot
+    # and within half a grid pitch (so each real sticker claims exactly one
+    # slot and a slot near a box edge still matches). Distance-based rather than
+    # strict box-containment, which was brittle near sticker gaps.
+    match_tol = spacing * 0.5
+
+    def nearest_box(px, py, taken):
+        best_idx = None
+        best_d = None
+        for bidx, (bx, by, bw, bh) in enumerate(squares):
+            if bidx in taken:
+                continue
+            bcx, bcy = bx + bw / 2.0, by + bh / 2.0
+            d = ((bcx - px) ** 2 + (bcy - py) ** 2) ** 0.5
+            if d <= match_tol and (best_d is None or d < best_d):
+                best_d = d
+                best_idx = bidx
+        return best_idx
+
+    best = None  # ((filled, -offset), grid-of-9-boxes)
+
+    if spacing <= 0:
+        return None
+
+    # Try every detected square as every possible grid position. This handles a
+    # MISSING CENTER: an outer sticker anchors the lattice, whose empty center
+    # slot is then reconstructed. (The old code only ever treated a square as
+    # the center, so a missing center sank the whole face.)
     for (x, y, w, h) in squares:
-        cx, cy = x + w / 2.0, y + h / 2.0
-        slots = neighbors_of(cx, cy, w, h)
-        matched = []
-        for (x2, y2, w2, h2) in squares:
-            for (sx, sy) in slots:
-                # slot center falls inside this square's box?
-                if x2 < sx and y2 < sy and x2 + w2 > sx and y2 + h2 > sy:
-                    matched.append((x2, y2, w2, h2))
-                    break
-        if len(matched) == 9:
-            # Sort into reading order: by y, then split into 3 rows by x.
-            ys = sorted(matched, key=lambda b: b[1])
-            rows = [
-                sorted(ys[0:3], key=lambda b: b[0]),
-                sorted(ys[3:6], key=lambda b: b[0]),
-                sorted(ys[6:9], key=lambda b: b[0]),
-            ]
-            return rows[0] + rows[1] + rows[2]
-    return None
+        acx, acy = x + w / 2.0, y + h / 2.0
+        for grid_row in range(3):
+            for grid_col in range(3):
+                slots = slots_from_anchor(acx, acy, grid_row, grid_col)
+                slot_boxes = [None] * 9
+                used = set()
+                for sidx, (sx, sy) in enumerate(slots):
+                    bidx = nearest_box(sx, sy, used)
+                    if bidx is not None:
+                        slot_boxes[sidx] = squares[bidx]
+                        used.add(bidx)
+                filled = [b for b in slot_boxes if b is not None]
+                if len(filled) < min_matches:
+                    continue
+
+                med_w = _median([b[2] for b in filled])
+                med_h = _median([b[3] for b in filled])
+                grid = []
+                total_offset = 0.0
+                for sidx, box in enumerate(slot_boxes):
+                    sx, sy = slots[sidx]
+                    if box is None:
+                        grid.append(
+                            (sx - med_w / 2.0, sy - med_h / 2.0, med_w, med_h)
+                        )
+                    else:
+                        grid.append(box)
+                        bcx = box[0] + box[2] / 2.0
+                        bcy = box[1] + box[3] / 2.0
+                        total_offset += abs(bcx - sx) + abs(bcy - sy)
+
+                # Quality gate: a genuine lattice fits tightly -- its real
+                # squares sit near their ideal slots. Reject sloppy fits (the
+                # mean per-sticker offset is a large fraction of the pitch),
+                # which is how random clutter occasionally fills enough slots.
+                mean_offset = total_offset / max(1, len(filled))
+                if mean_offset > spacing * 0.33:
+                    continue
+
+                key = (len(filled), -total_offset)
+                if best is None or key > best[0]:
+                    best = (key, grid)
+
+    if best is None:
+        return None
+
+    grid = best[1]
+    # Sort into reading order: by y, then split into 3 rows and sort by x.
+    ys = sorted(grid, key=lambda b: b[1] + b[3] / 2.0)
+    rows = [
+        sorted(ys[0:3], key=lambda b: b[0]),
+        sorted(ys[3:6], key=lambda b: b[0]),
+        sorted(ys[6:9], key=lambda b: b[0]),
+    ]
+    return rows[0] + rows[1] + rows[2]
 
 
 def is_sticker_square(w, h, area, min_w=20, max_w=120):

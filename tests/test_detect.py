@@ -58,7 +58,57 @@ def test_find_cube_by_neighbors_clean_grid():
 
 
 def test_find_cube_by_neighbors_rejects_too_few():
-    assert find_cube_by_neighbors(_grid_boxes()[:8]) is None
+    # Fewer than min_matches (default 7) squares: no lattice to anchor to.
+    assert find_cube_by_neighbors(_grid_boxes()[:6]) is None
+
+
+def test_find_cube_by_neighbors_reconstructs_missing_center():
+    # The real-hardware case: 8 OUTER stickers detected, the logo'd CENTER
+    # sticker missing. The lattice must be completed by inferring the center.
+    boxes = _grid_boxes()
+    # Drop the center (index 4 in a row-major 3x3).
+    without_center = [b for i, b in enumerate(boxes) if i != 4]
+    assert len(without_center) == 8
+    face = find_cube_by_neighbors(without_center)
+    assert face is not None and len(face) == 9
+    # The reconstructed center must sit at the geometric middle of the face.
+    cx = (face[0][0] + face[8][0] + face[8][2]) / 2.0  # rough middle x
+    center_box = face[4]
+    center_cx = center_box[0] + center_box[2] / 2.0
+    center_cy = center_box[1] + center_box[3] / 2.0
+    expected = boxes[4]
+    exp_cx = expected[0] + expected[2] / 2.0
+    exp_cy = expected[1] + expected[3] / 2.0
+    assert abs(center_cx - exp_cx) < 6 and abs(center_cy - exp_cy) < 6
+
+
+def test_find_cube_by_neighbors_reconstructs_missing_corner():
+    # A missing CORNER sticker (glare) must also be reconstructed in place.
+    boxes = _grid_boxes()
+    without_corner = [b for i, b in enumerate(boxes) if i != 0]  # drop top-left
+    face = find_cube_by_neighbors(without_corner)
+    assert face is not None and len(face) == 9
+    # Top-left (reading-order index 0) is the reconstructed one; it should be
+    # up-and-left of the center.
+    assert face[0][0] < face[4][0] and face[0][1] < face[4][1]
+
+
+def test_find_cube_by_neighbors_two_missing_still_recovers():
+    # Up to two missing stickers (min_matches=7) must still complete the grid.
+    boxes = _grid_boxes()
+    sparse = [b for i, b in enumerate(boxes) if i not in (4, 0)]
+    assert len(sparse) == 7
+    face = find_cube_by_neighbors(sparse)
+    assert face is not None and len(face) == 9
+
+
+def test_find_cube_by_neighbors_strict_mode_still_requires_all_nine():
+    # Opting back into strict behaviour (min_matches=9) rejects an 8/9 face.
+    boxes = _grid_boxes()
+    without_center = [b for i, b in enumerate(boxes) if i != 4]
+    assert find_cube_by_neighbors(without_center, min_matches=9) is None
+    # ...but accepts a complete grid.
+    assert find_cube_by_neighbors(boxes, min_matches=9) is not None
 
 
 def test_find_cube_by_neighbors_ignores_scattered_noise():
