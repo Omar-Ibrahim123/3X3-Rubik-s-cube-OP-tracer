@@ -58,6 +58,63 @@ def _lazy_imports():
     return cv2, np
 
 
+def save_frames(camera_index: int = 0, out_dir: str = "frames"):
+    """Live preview; press SPACE to save the current frame as a PNG.
+
+    Diagnostic tool for tuning cube detection: capture a few real frames of your
+    cube (different faces/angles) and share them. Each SPACE writes
+    frames/frameNN.png. Also overlays what the CURRENT detector finds (circles
+    on detected stickers), so you can see live whether detection fires at all.
+    Press q/ESC to finish.
+    """
+    import os
+
+    cv2, _ = _lazy_imports()
+    from .detect import detect_face_grid
+
+    os.makedirs(out_dir, exist_ok=True)
+    cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
+        raise RuntimeError(f"could not open camera index {camera_index}")
+    saved = []
+    n = 0
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                raise RuntimeError("failed to read camera frame")
+            disp = frame.copy()
+            # Show what the current detector sees, so detection is visible live.
+            squares = _find_sticker_squares(frame)
+            centers = detect_face_grid(squares)
+            cv2.putText(disp, f"squares found: {len(squares)}", (20, 36),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2,
+                        cv2.LINE_AA)
+            if centers is not None:
+                for (x, y) in centers:
+                    cv2.circle(disp, (int(x), int(y)), 10, (0, 255, 0), 2)
+                cv2.putText(disp, "FACE DETECTED", (20, 70),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 220, 0), 2,
+                            cv2.LINE_AA)
+            cv2.putText(disp, "SPACE=save frame   q=done", (20, disp.shape[0] - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1,
+                        cv2.LINE_AA)
+            cv2.imshow("save-frame (share these PNGs)", disp)
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord(" "), 13):
+                path = os.path.join(out_dir, f"frame{n:02d}.png")
+                cv2.imwrite(path, frame)  # save the CLEAN frame, no overlay
+                saved.append(path)
+                print(f"saved {path}")
+                n += 1
+            elif key in (ord("q"), 27):
+                break
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+    return saved
+
+
 def _find_sticker_squares(frame, min_frac=0.0015, max_frac=0.08):
     """Detect candidate sticker squares in a frame -> list of detect.Square.
 

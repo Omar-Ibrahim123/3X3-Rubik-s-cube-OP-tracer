@@ -94,6 +94,34 @@ def cmd_scan(camera_index: int, manual: str, debug: bool) -> int:
     return cmd_trace(facelets)
 
 
+def cmd_save_frame(camera_index: int) -> int:
+    """Save real camera frames to PNG for detector tuning / sharing.
+
+    Opens a preview; SPACE saves frames/frameNN.png (the clean frame), q quits.
+    Requires OpenCV locally.
+    """
+    from vision import capture  # lazy: only needs OpenCV here
+
+    try:
+        saved = capture.save_frames(camera_index=camera_index)
+    except ImportError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    except KeyboardInterrupt:
+        saved = []
+    except (RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if saved:
+        print(f"\nSaved {len(saved)} frame(s) to the 'frames/' folder:")
+        for p in saved:
+            print(f"  {p}")
+        print("\nShare these PNGs so the detector can be tuned to your cube.")
+    else:
+        print("No frames saved.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Old Pochmann BLD cube tracer")
     g = p.add_mutually_exclusive_group(required=True)
@@ -112,6 +140,10 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument(
         "--scan-manual", action="store_true",
         help="backup scan: show each face and press SPACE (robust in bad light)",
+    )
+    g.add_argument(
+        "--save-frame", action="store_true",
+        help="save camera frames to PNG (for tuning/sharing detection)",
     )
     g.add_argument(
         "--demo-tps", action="store_true",
@@ -133,6 +165,8 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.demo_tps:
         return cmd_demo_tps()
+    if args.save_frame:
+        return cmd_save_frame(args.camera)
     if args.scan or args.scan_box or args.scan_manual:
         mode = "manual" if args.scan_manual else "box" if args.scan_box else "auto"
         return cmd_scan(args.camera, manual=mode, debug=args.debug)
