@@ -195,3 +195,111 @@ def scan_faces(
         cap.release()
         cv2.destroyAllWindows()
     return faces
+
+
+def _draw_spin_overlay(frame, cells, box, half, collector, just_got=None):
+    """Overlay for the spin flow: live grid + collected-faces progress bar."""
+    cv2, _ = _lazy_imports()
+    h, w = frame.shape[:2]
+    cx, cy = w // 2, h // 2
+    step = box // 3
+    top_left = (cx - 3 * step // 2, cy - 3 * step // 2)
+    for i in range(4):
+        x = top_left[0] + i * step
+        y = top_left[1] + i * step
+        cv2.line(frame, (x, top_left[1]), (x, top_left[1] + box), (255, 255, 255), 1)
+        cv2.line(frame, (top_left[0], y), (top_left[0] + box, y), (255, 255, 255), 1)
+    for (x, y) in cells:
+        cv2.rectangle(frame, (x - half, y - half), (x + half, y + half),
+                      (0, 255, 0), 1)
+    # Instruction + progress.
+    cv2.putText(frame, "Slowly rotate the cube through all 6 faces",
+                (20, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2,
+                cv2.LINE_AA)
+    collected = set(collector.collected_faces())
+    label = "Collected: "
+    cv2.putText(frame, label, (20, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                (200, 200, 200), 1, cv2.LINE_AA)
+    x0 = 20 + 110
+    for face in FACE_NAMES:
+        got = face in collected
+        color = (0, 220, 0) if got else (90, 90, 90)
+        cv2.putText(frame, face, (x0, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                    color, 2, cv2.LINE_AA)
+        x0 += 28
+    if just_got:
+        cv2.putText(frame, f"captured {just_got}!", (20, h - 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 220, 0), 2, cv2.LINE_AA)
+    cv2.putText(frame, "q/ESC = quit", (20, h - 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
+    return frame
+
+
+def spin_scan(
+    classifier,
+    camera_index: int = 0,
+    box_frac: float = 0.6,
+    steady_frames: int = 6,
+):
+    """Low-friction capture: rotate the cube; auto-detect each face by center.
+
+    `classifier` must already be calibrated (see calibrate_centers). Returns
+    {face_letter: [9 RGB samples]} once all six faces have been captured.
+    """
+    cv2, _ = _lazy_imports()
+    from .spin import FaceCandidate, SpinCollector
+
+    collector = SpinCollector(classifier=classifier, steady_frames=steady_frames)
+    cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
+        raise RuntimeError(f"could not open camera index {camera_index}")
+    just_got = None
+    just_got_ttl = 0
+    try:
+        while not collector.is_complete():
+            ok, frame = cap.read()
+            if not ok:
+                raise RuntimeError("failed to read camera frame")
+            h, w = frame.shape[:2]
+            box = int(min(w, h) * box_frac)
+            half = max(4, box // 12)
+            cells = _grid_cell_centers(w, h, box)
+            samples = [_sample_cell(frame, c, half) for c in cells]
+            got = collector.offer(FaceCandidate(samples=samples))
+            if got:
+                just_got = got
+                just_got_ttl = 20
+            if just_got_ttl > 0:
+                just_got_ttl -= 1
+            else:
+                just_got = None
+            disp = frame.copy()
+            _draw_spin_overlay(disp, cells, box, half, collector, just_got)
+            cv2.imshow("spin-scan", disp)
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):
+                raise KeyboardInterrupt("spin scan aborted")
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+    return collector.faces()
+
+
+def confirm_facelets(facelets: str, classifier=None) -> bool:
+    """Show the detected cube as text and ask for a one-key confirm.
+
+    Returns True to accept, False to re-scan. Printed to the console (no extra
+    window) so it works even on minimal setups.
+    """
+    print("\nDetected cube (facelet string):")
+    print(f"  {facelets}")
+    print("Faces (U R F D L B), each read top-left to bottom-right:")
+    for i, face in enumerate(FACE_NAMES):
+        chunk = facelets[i * 9:(i + 1) * 9]
+        print(f"  {face}: {chunk[0:3]} {chunk[3:6]} {chunk[6:9]}")
+    while True:
+        resp = input("Accept this scan? [y]es / [n]o re-scan: ").strip().lower()
+        if resp in ("y", "yes", ""):
+            return True
+        if resp in ("n", "no"):
+            return False

@@ -61,29 +61,39 @@ python -m app.main --demo-tps
 
 ### Scanning a real cube with your webcam
 
-The static scanner needs OpenCV + numpy (only for scanning, not the core):
+The scanner needs OpenCV + numpy (only for scanning, not the core):
 
 ```bash
 pip install -r requirements-scan.txt      # opencv-python, numpy
 python -m app.main --scan                  # add --camera 1 if the wrong cam opens
 ```
 
-The guided flow is:
+**Default: spin-to-scan (low friction).**
 
-1. **Calibrate** — a window opens; show each **center** sticker (U, R, F, D, L,
-   B) when prompted and press **SPACE**. This teaches the app your cube's actual
-   colors under your lighting, which is what makes orange-vs-red reliable.
-2. **Scan** — for each face, line the face up inside the 3×3 overlay so each
-   sticker sits under a green sample box, then press **SPACE**. Keep the cube in
-   a consistent orientation as you turn it to show each face.
-3. The app classifies the colors, **validates** the result (re-prompting if a
-   scan is impossible), prints the facelet string, and then the OP trace.
+1. **Calibrate** — a window opens; show each **center** sticker once (U, R, F,
+   D, L, B) and press **SPACE**. This teaches the app your cube's actual colors
+   under your lighting, which is what makes orange-vs-red reliable and lets the
+   next step identify faces automatically.
+2. **Spin** — slowly rotate the cube so each face passes square-on through the
+   3×3 overlay. The app **auto-detects each face by its center color** and
+   captures it once it's held steady for a moment. The on-screen progress bar
+   lights up the faces (U R F D L B) as they're collected — no key presses.
+3. **Confirm** — it prints the detected cube; press **y** to accept (or **n** to
+   re-scan). Then it prints the OP trace.
 
-Controls: **SPACE/ENTER** capture · **r** redo last face · **q/ESC** quit.
+**Backup: manual scan** (more robust under poor/uneven lighting):
 
-Tips for good scans: even, diffuse lighting; avoid glare/reflection on the
-stickers; fill the grid with the face. If a scan won't validate, it's almost
-always lighting — recalibrate under the same light you'll scan in.
+```bash
+python -m app.main --scan-manual
+```
+
+Show each face in turn and press **SPACE** to capture it (controls: **SPACE**
+capture · **r** redo · **q/ESC** quit).
+
+Tips: even, diffuse lighting; avoid glare on the stickers; keep the face
+square-on and filling the grid. If the spin flow struggles with your lighting,
+`--scan-manual` is the reliable fallback. Recalibrate under the same light you
+scan in.
 
 Example output for a scramble:
 

@@ -60,17 +60,22 @@ def cmd_demo_tps() -> int:
     return 0
 
 
-def cmd_scan(camera_index: int) -> int:
+def cmd_scan(camera_index: int, manual: bool) -> int:
     """Scan a physical cube with the webcam and print its OP trace.
 
-    Runs the full guided flow: calibrate centers -> scan 6 faces -> validate
-    -> trace. Requires OpenCV locally (pip install opencv-python numpy).
+    Default (spin): calibrate centers -> slowly rotate the cube through all six
+    faces (auto-detected by center color) -> confirm -> trace.
+    Manual backup: calibrate -> show each face and press SPACE -> confirm.
+    Requires OpenCV locally (pip install -r requirements-scan.txt).
     """
     from vision import StaticScanner  # lazy: only needs OpenCV here
 
     scanner = StaticScanner(camera_index=camera_index)
     try:
-        facelets = scanner.read_facelets()
+        if manual:
+            facelets = scanner.read_facelets_manual()
+        else:
+            facelets = scanner.read_facelets()
     except ImportError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 3
@@ -93,7 +98,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     g.add_argument(
         "--scan", action="store_true",
-        help="scan a physical cube with the webcam, then trace it",
+        help="scan a cube by slowly spinning it through all 6 faces, then trace",
+    )
+    g.add_argument(
+        "--scan-manual", action="store_true",
+        help="backup scan: show each face and press SPACE (robust in bad light)",
     )
     g.add_argument(
         "--demo-tps", action="store_true",
@@ -101,7 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--camera", type=int, default=0, metavar="INDEX",
-        help="webcam index for --scan (default 0; try 1 if you have multiple)",
+        help="webcam index for scanning (default 0; try 1 if you have multiple)",
     )
     return p
 
@@ -110,8 +119,8 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.demo_tps:
         return cmd_demo_tps()
-    if args.scan:
-        return cmd_scan(args.camera)
+    if args.scan or args.scan_manual:
+        return cmd_scan(args.camera, manual=args.scan_manual)
     return cmd_trace(args.facelets)
 
 
