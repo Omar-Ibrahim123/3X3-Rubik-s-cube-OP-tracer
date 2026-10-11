@@ -12,6 +12,7 @@ so this package and the test suite work without OpenCV installed.
 """
 
 from .colors import (
+    STANDARD_SCHEME,
     ColorClassifier,
     ValidationResult,
     assemble_facelets,
@@ -24,6 +25,7 @@ __all__ = [
     "StaticScanner",
     "ColorClassifier",
     "ValidationResult",
+    "STANDARD_SCHEME",
     "assemble_facelets",
     "validate_facelets",
 ]

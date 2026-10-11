@@ -27,6 +27,20 @@ FACE_NAMES = ("U", "R", "F", "D", "L", "B")
 
 RGB = Tuple[float, float, float]
 
+# Built-in reference colors for the standard BOY/Western color scheme, with the
+# cube held white-up / green-front (so: U=white, D=yellow, F=green, B=blue,
+# R=red, L=orange). Used by from_white_anchor() so the user only has to show
+# the white face: these references are rescaled to the user's lighting using
+# their measured white. Values are nominal sRGB-ish sticker colors.
+STANDARD_SCHEME: Dict[str, RGB] = {
+    "U": (245, 245, 245),   # white
+    "D": (255, 213, 0),     # yellow
+    "F": (0, 158, 73),      # green
+    "B": (0, 70, 173),      # blue
+    "R": (196, 30, 45),     # red
+    "L": (255, 88, 0),      # orange
+}
+
 
 # ---------------------------------------------------------------------------
 # Color distance in a lighting-tolerant space.
@@ -79,6 +93,38 @@ class ColorClassifier:
         if missing:
             raise ValueError(f"calibration missing faces: {sorted(missing)}")
         return cls(references=dict(centers))
+
+    @classmethod
+    def from_white_anchor(cls, white_sample: RGB) -> "ColorClassifier":
+        """Build a classifier from a single measured WHITE sample.
+
+        Low-friction calibration: the user shows only the white (U) face. We
+        take the built-in BOY/Western reference colors (STANDARD_SCHEME) and
+        rescale every channel by how the user's measured white differs from
+        canonical white. This adapts all six references to the user's lighting
+        and white balance from one sample, so orange/red etc. shift the same
+        way the white did.
+
+        Assumes the standard (BOY/Western) color scheme. If a cube uses a
+        different scheme, use from_centers() (the manual multi-center flow).
+        """
+        canonical_white = STANDARD_SCHEME["U"]
+        # Per-channel gain so measured white maps onto canonical white's shape.
+        # Guard against zero channels; clamp gains to a sane range so a bad
+        # white reading can't blow up the references.
+        gains = []
+        for i in range(3):
+            cw = canonical_white[i]
+            ws = white_sample[i]
+            g = (ws / cw) if cw else 1.0
+            g = max(0.3, min(g, 3.0))
+            gains.append(g)
+        refs: Dict[str, RGB] = {}
+        for face, ref in STANDARD_SCHEME.items():
+            refs[face] = tuple(
+                max(0.0, min(255.0, ref[i] * gains[i])) for i in range(3)
+            )
+        return cls(references=refs)
 
     def classify(self, sample: RGB) -> str:
         """Return the face letter whose calibrated color is nearest `sample`."""

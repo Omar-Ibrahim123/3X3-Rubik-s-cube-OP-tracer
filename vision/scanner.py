@@ -97,8 +97,14 @@ class StaticScanner(FaceletSource):
     def _scan(self, spin: bool) -> str:
         from . import capture  # lazy: only import OpenCV when scanning
 
-        centers = capture.calibrate_centers(self._camera_index)
-        self._classifier = ColorClassifier.from_centers(centers)
+        if spin:
+            # Low-friction: show white once; anchor standard-scheme colors to it.
+            white = capture.calibrate_white(self._camera_index)
+            self._classifier = ColorClassifier.from_white_anchor(white)
+        else:
+            # Manual backup: full six-center calibration (handles any scheme).
+            centers = capture.calibrate_centers(self._camera_index)
+            self._classifier = ColorClassifier.from_centers(centers)
 
         attempts = 0
         while True:

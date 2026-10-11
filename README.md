@@ -68,12 +68,12 @@ pip install -r requirements-scan.txt      # opencv-python, numpy
 python -m app.main --scan                  # add --camera 1 if the wrong cam opens
 ```
 
-**Default: spin-to-scan (low friction).**
+**Default: spin-to-scan (low friction).** Assumes a standard **BOY/Western**
+color scheme (white opposite yellow, green opposite blue, red opposite orange).
 
-1. **Calibrate** — a window opens; show each **center** sticker once (U, R, F,
-   D, L, B) and press **SPACE**. This teaches the app your cube's actual colors
-   under your lighting, which is what makes orange-vs-red reliable and lets the
-   next step identify faces automatically.
+1. **Show white** — a window opens; show the **white** face once and press
+   **SPACE**. That single sample anchors the built-in standard-scheme colors to
+   your lighting (so orange/red stay reliable). No six-sticker calibration.
 2. **Spin** — slowly rotate the cube so each face passes square-on through the
    3×3 overlay. The app **auto-detects each face by its center color** and
    captures it once it's held steady for a moment. The on-screen progress bar
@@ -81,14 +81,16 @@ python -m app.main --scan                  # add --camera 1 if the wrong cam ope
 3. **Confirm** — it prints the detected cube; press **y** to accept (or **n** to
    re-scan). Then it prints the OP trace.
 
-**Backup: manual scan** (more robust under poor/uneven lighting):
+**Backup: manual scan** (more robust under poor/uneven lighting, and works
+with any color scheme since it calibrates all six centers):
 
 ```bash
 python -m app.main --scan-manual
 ```
 
-Show each face in turn and press **SPACE** to capture it (controls: **SPACE**
-capture · **r** redo · **q/ESC** quit).
+Calibrate by showing each center, then show each face in turn and press
+**SPACE** to capture it (controls: **SPACE** capture · **r** redo · **q/ESC**
+quit).
 
 Tips: even, diffuse lighting; avoid glare on the stickers; keep the face
 square-on and filling the grid. If the spin flow struggles with your lighting,
