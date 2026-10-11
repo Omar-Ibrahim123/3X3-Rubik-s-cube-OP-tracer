@@ -180,6 +180,21 @@ def calibrate_and_spin(camera_index=0, steady_frames=6, debug=False):
                             calibrate_and_spin._rej_tick = tick
                             if tick % 15 == 0:
                                 print(f"[debug] rejected: {collector.last_rejection}")
+                                # Dump WHAT was sampled + each sticker's nearest
+                                # calibrated color and distance, so a bad
+                                # calibration (vs a bad frame) is diagnosable.
+                                from .spin import face_coherence
+                                coh = face_coherence(samples, classifier)
+                                for i, (s, d) in enumerate(
+                                    zip(samples, coh.sticker_distances)
+                                ):
+                                    near = classifier.classify(s)
+                                    flag = "  <-- OFF" if d > 18 else ""
+                                    print(
+                                        f"    sticker {i}: "
+                                        f"({s[0]:.0f},{s[1]:.0f},{s[2]:.0f}) "
+                                        f"-> {near} dE={d:.1f}{flag}"
+                                    )
 
                 cv2.putText(
                     display,
