@@ -56,10 +56,12 @@ class StaticScanner(FaceletSource):
         camera_index: int = 0,
         on_turn: Optional[Callable[[], None]] = None,
         max_rescans: int = 3,
+        debug: bool = False,
     ):
         self._camera_index = camera_index
         self._on_turn = on_turn
         self._max_rescans = max_rescans
+        self._debug = debug
         self._classifier: Optional[ColorClassifier] = None
 
     # --- Classification is injectable so it can be tested without a camera. ---
@@ -97,21 +99,21 @@ class StaticScanner(FaceletSource):
     def _scan(self, spin: bool) -> str:
         from . import capture  # lazy: only import OpenCV when scanning
 
-        if spin:
-            # Low-friction: show white once; anchor standard-scheme colors to it.
-            white = capture.calibrate_white(self._camera_index)
-            self._classifier = ColorClassifier.from_white_anchor(white)
-        else:
-            # Manual backup: full six-center calibration (handles any scheme).
-            centers = capture.calibrate_centers(self._camera_index)
-            self._classifier = ColorClassifier.from_centers(centers)
-
         attempts = 0
         while True:
             if spin:
-                faces = capture.spin_scan(self._classifier, self._camera_index)
+                # One continuous window: show white, then spin -- no window
+                # switch. The classifier is built from the white sample inside
+                # the same session.
+                self._classifier, faces = capture.spin_scan_session(
+                    camera_index=self._camera_index, debug=self._debug
+                )
             else:
+                # Manual backup: full six-center calibration (handles any scheme).
+                centers = capture.calibrate_centers(self._camera_index)
+                self._classifier = ColorClassifier.from_centers(centers)
                 faces = capture.scan_faces(self._camera_index)
+
             facelets = assemble_facelets(faces, self._classifier)
             result = validate_facelets(facelets)
 

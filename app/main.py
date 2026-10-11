@@ -60,17 +60,19 @@ def cmd_demo_tps() -> int:
     return 0
 
 
-def cmd_scan(camera_index: int, manual: bool) -> int:
+def cmd_scan(camera_index: int, manual: bool, debug: bool) -> int:
     """Scan a physical cube with the webcam and print its OP trace.
 
-    Default (spin): calibrate centers -> slowly rotate the cube through all six
-    faces (auto-detected by center color) -> confirm -> trace.
+    Default (spin): one window -- show white, then slowly rotate the cube
+    through all six faces (auto-detected by center color) -> confirm -> trace.
     Manual backup: calibrate -> show each face and press SPACE -> confirm.
+    With --debug, each sticker is labeled live with its classified color and
+    per-face RGB samples are printed, to diagnose color issues.
     Requires OpenCV locally (pip install -r requirements-scan.txt).
     """
     from vision import StaticScanner  # lazy: only needs OpenCV here
 
-    scanner = StaticScanner(camera_index=camera_index)
+    scanner = StaticScanner(camera_index=camera_index, debug=debug)
     try:
         if manual:
             facelets = scanner.read_facelets_manual()
@@ -112,6 +114,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--camera", type=int, default=0, metavar="INDEX",
         help="webcam index for scanning (default 0; try 1 if you have multiple)",
     )
+    p.add_argument(
+        "--debug", action="store_true",
+        help="label each sticker live with its detected color + print RGB "
+             "samples (use to diagnose color-detection issues)",
+    )
     return p
 
 
@@ -120,7 +127,7 @@ def main(argv=None) -> int:
     if args.demo_tps:
         return cmd_demo_tps()
     if args.scan or args.scan_manual:
-        return cmd_scan(args.camera, manual=args.scan_manual)
+        return cmd_scan(args.camera, manual=args.scan_manual, debug=args.debug)
     return cmd_trace(args.facelets)
 
 
