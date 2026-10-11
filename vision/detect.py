@@ -99,6 +99,55 @@ def trimmed_median_color(
     return tuple(out)
 
 
+def score_face_candidate(
+    rcx: float, rcy: float, rw: float, rh: float, extent: float,
+    frame_w: float, frame_h: float,
+) -> float:
+    """Score a candidate cube-face rect; higher is more cube-like. 0 = reject.
+
+    A real cube face held up to scan is: roughly SQUARE, well-FILLED by its
+    region (extent), a reasonable SIZE (not tiny, not the whole frame), and
+    near the frame CENTER (you hold it up centered; posters/shelves/doors sit
+    at the edges). This single score replaces fixed thresholds + 'largest wins',
+    so detection works across the full close->far distance range and ignores
+    busy-background false positives.
+
+    Returns 0.0 if the candidate is disqualified (wrong aspect, too small/large,
+    poorly filled, or hugging a frame edge).
+    """
+    if rw <= 0 or rh <= 0 or frame_w <= 0 or frame_h <= 0:
+        return 0.0
+    frame_area = frame_w * frame_h
+    area = rw * rh
+    size_frac = area / frame_area
+
+    # Hard rejects.
+    aspect = max(rw, rh) / min(rw, rh)
+    if aspect > 1.4:
+        return 0.0
+    if extent < 0.68:
+        return 0.0
+    if not (0.015 <= size_frac <= 0.95):  # ~12%..97% of a side length
+        return 0.0
+
+    # Centrality: 1.0 at frame center, decreasing toward edges.
+    nx = (rcx - frame_w / 2) / (frame_w / 2)
+    ny = (rcy - frame_h / 2) / (frame_h / 2)
+    offcenter = (nx * nx + ny * ny) ** 0.5  # 0 center .. ~1.4 corner
+    centrality = max(0.0, 1.0 - offcenter)
+
+    # Prefer a square shape and a well-filled region.
+    squareness = 1.0 / aspect          # 1.0 = perfect square
+    fill = min(1.0, extent)
+
+    # Mild size preference peaking around a comfortably-held cube (~1/9 of frame
+    # area, i.e. ~1/3 of a side). Avoids both tiny specks and whole-frame grabs.
+    import math
+    size_pref = math.exp(-((size_frac - 0.11) ** 2) / (2 * 0.10 ** 2))
+
+    return centrality * 1.4 + squareness + fill + size_pref
+
+
 def subdivide_face(
     cx: float, cy: float, size: float, angle: float = 0.0, inset: float = 0.72
 ) -> List[Tuple[float, float]]:

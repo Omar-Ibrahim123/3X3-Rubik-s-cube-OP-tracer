@@ -137,6 +137,21 @@ def cmd_analyze_frame(path: str) -> int:
     return 0
 
 
+def cmd_analyze_dir(folder: str) -> int:
+    """Run detection on every image in a folder; print a pass/fail summary."""
+    from vision import capture  # lazy: only needs OpenCV here
+
+    try:
+        capture.analyze_dir(folder)
+    except ImportError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    except (RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Old Pochmann BLD cube tracer")
     g = p.add_mutually_exclusive_group(required=True)
@@ -165,6 +180,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="run detection on a saved image; dump mask/annotated PNGs for tuning",
     )
     g.add_argument(
+        "--analyze-dir", metavar="DIR",
+        help="run detection on every PNG in a folder; print pass/fail summary",
+    )
+    g.add_argument(
         "--demo-tps", action="store_true",
         help="run the TPS counter playback demo",
     )
@@ -188,6 +207,8 @@ def main(argv=None) -> int:
         return cmd_save_frame(args.camera)
     if args.analyze_frame:
         return cmd_analyze_frame(args.analyze_frame)
+    if args.analyze_dir:
+        return cmd_analyze_dir(args.analyze_dir)
     if args.scan or args.scan_box or args.scan_manual:
         mode = "manual" if args.scan_manual else "box" if args.scan_box else "auto"
         return cmd_scan(args.camera, manual=mode, debug=args.debug)
