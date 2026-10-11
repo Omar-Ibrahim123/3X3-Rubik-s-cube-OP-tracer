@@ -71,15 +71,24 @@ python -m app.main --scan                  # add --camera 1 if the wrong cam ope
 **Default: spin-to-scan (low friction).** Assumes a standard **BOY/Western**
 color scheme (white opposite yellow, green opposite blue, red opposite orange).
 
-1. **Show white** — a window opens; show the **white** face once and press
-   **SPACE**. That single sample anchors the built-in standard-scheme colors to
-   your lighting (so orange/red stay reliable). No six-sticker calibration.
-2. **Spin** — slowly rotate the cube so each face passes square-on through the
-   3×3 overlay. The app **auto-detects each face by its center color** and
-   captures it once it's held steady for a moment. The on-screen progress bar
-   lights up the faces (U R F D L B) as they're collected — no key presses.
+It all happens in **one window** — no window switch between steps:
+
+1. **Show white** — show the **white** face once and press **SPACE**. That
+   single sample anchors the built-in standard-scheme colors to your lighting
+   (so orange/red stay reliable). No six-sticker calibration.
+2. **Spin** — in the same window, slowly rotate the cube so each face passes
+   square-on through the 3×3 overlay. The app **auto-detects each face by its
+   center color** and captures it once held steady. The progress bar lights up
+   U R F D L B as they're collected — no key presses.
 3. **Confirm** — it prints the detected cube; press **y** to accept (or **n** to
    re-scan). Then it prints the OP trace.
+
+**Diagnosing color issues:** add `--debug` to label each sticker live with the
+color it's being classified as, and print the raw RGB samples per face:
+
+```bash
+python -m app.main --scan --debug
+```
 
 **Backup: manual scan** (more robust under poor/uneven lighting, and works
 with any color scheme since it calibrates all six centers):

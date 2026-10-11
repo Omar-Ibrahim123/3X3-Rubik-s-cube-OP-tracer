@@ -338,3 +338,115 @@ def confirm_facelets(facelets: str, classifier=None) -> bool:
             return True
         if resp in ("n", "no"):
             return False
+
+
+# Short names for a compact on-screen color readout.
+_FACE_LABEL = {"U": "Wht", "D": "Yel", "F": "Grn", "B": "Blu", "R": "Red", "L": "Org"}
+
+
+def _draw_live_classification(frame, cells, half, classifier):
+    """Label each sampled cell with the color it currently classifies as.
+
+    This is the diagnostic that makes color problems visible: you see, live,
+    what the app thinks each sticker is, so misreads are obvious on screen.
+    """
+    cv2, _ = _lazy_imports()
+    for (x, y) in cells:
+        sample = _sample_cell(frame, (x, y), half)
+        face = classifier.classify(sample)
+        cv2.putText(frame, _FACE_LABEL.get(face, face), (x - 18, y + 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(frame, _FACE_LABEL.get(face, face), (x - 18, y + 5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+
+
+def spin_scan_session(
+    camera_index: int = 0,
+    box_frac: float = 0.6,
+    steady_frames: int = 6,
+    debug: bool = False,
+):
+    """One continuous window: show white -> (no window switch) -> spin all faces.
+
+    Phase A (white): prompts for the white face; SPACE builds the classifier
+    from that single sample (ColorClassifier.from_white_anchor).
+    Phase B (spin): immediately, in the SAME window, collect all six faces by
+    slowly rotating the cube; faces are auto-detected by center color.
+
+    Returns (classifier, {face: 9 samples}). With debug=True, each sticker is
+    labeled live with its classified color and the per-face samples are printed
+    when captured, so color-detection issues are easy to diagnose.
+    """
+    cv2, _ = _lazy_imports()
+    from .colors import ColorClassifier
+    from .spin import FaceCandidate, SpinCollector
+
+    cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
+        raise RuntimeError(f"could not open camera index {camera_index}")
+
+    win = "cube scan"
+    classifier = None
+    collector = None
+    just_got = None
+    just_got_ttl = 0
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                raise RuntimeError("failed to read camera frame")
+            h, w = frame.shape[:2]
+            box = int(min(w, h) * box_frac)
+            half = max(4, box // 12)
+            disp = frame.copy()
+
+            if classifier is None:
+                # ---- Phase A: white calibration ----
+                center = (w // 2, h // 2)
+                _draw_overlay(
+                    disp, [center], box // 3, half,
+                    "Show the WHITE face, press SPACE",
+                )
+                cv2.imshow(win, disp)
+                key = cv2.waitKey(1) & 0xFF
+                if key in (ord(" "), 13):
+                    white = _sample_cell(frame, center, half)
+                    classifier = ColorClassifier.from_white_anchor(white)
+                    collector = SpinCollector(
+                        classifier=classifier, steady_frames=steady_frames
+                    )
+                    if debug:
+                        print(f"[debug] white sample RGB = "
+                              f"({white[0]:.0f}, {white[1]:.0f}, {white[2]:.0f})")
+                elif key in (ord("q"), 27):
+                    raise KeyboardInterrupt("scan aborted")
+                continue
+
+            # ---- Phase B: spin collection (same window) ----
+            cells = _grid_cell_centers(w, h, box)
+            samples = [_sample_cell(frame, c, half) for c in cells]
+            got = collector.offer(FaceCandidate(samples=samples))
+            if got:
+                just_got = got
+                just_got_ttl = 20
+                if debug:
+                    rgb = [f"({s[0]:.0f},{s[1]:.0f},{s[2]:.0f})" for s in samples]
+                    print(f"[debug] captured {got}: {rgb}")
+            if just_got_ttl > 0:
+                just_got_ttl -= 1
+            else:
+                just_got = None
+
+            _draw_spin_overlay(disp, cells, box, half, collector, just_got)
+            if debug:
+                _draw_live_classification(disp, cells, half, classifier)
+            cv2.imshow(win, disp)
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):
+                raise KeyboardInterrupt("scan aborted")
+            if collector.is_complete():
+                break
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+    return classifier, collector.faces()
