@@ -160,6 +160,26 @@ def calibrate_and_spin(camera_index=0, steady_frames=6, debug=False):
                                 for r, g, b in samples
                             ]
                             print(f"[debug] captured {accepted}: {values}")
+                    elif collector.last_rejection:
+                        # The coherence gate refused this reading. Show WHY, on
+                        # screen and (throttled) in debug, so the user knows to
+                        # re-show the face squarely instead of silently getting
+                        # a corrupt scan.
+                        cv2.putText(
+                            display,
+                            "re-show face squarely (mixed reading)",
+                            (20, 130),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.55,
+                            (0, 165, 255),
+                            2,
+                            cv2.LINE_AA,
+                        )
+                        if debug:
+                            tick = getattr(calibrate_and_spin, "_rej_tick", 0) + 1
+                            calibrate_and_spin._rej_tick = tick
+                            if tick % 15 == 0:
+                                print(f"[debug] rejected: {collector.last_rejection}")
 
                 cv2.putText(
                     display,

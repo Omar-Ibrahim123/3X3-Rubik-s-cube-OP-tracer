@@ -23,7 +23,7 @@ the calibrated ColorClassifier. Because we calibrate on the six centers first,
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .colors import FACE_NAMES, RGB, ColorClassifier
 
@@ -36,6 +36,133 @@ class FaceCandidate:
 
     def center(self) -> RGB:
         return self.samples[4]
+
+
+# ---------------------------------------------------------------------------
+# Face-coherence gate (pure, testable).
+#
+# Root cause of the mixed-up scans seen on real hardware: a face was identified
+# by its CENTER sticker alone, so if detection grabbed a wrong / rotated /
+# partial region whose center happened to classify as some face, the whole
+# garbled 9-sticker grid was accepted. Real debug data showed single "faces"
+# containing stickers from four or five different real faces.
+#
+# A genuine cube face, by contrast, is internally consistent: its center is
+# clearly one color (confident classification), and its 9 stickers do not span
+# nearly every face of the cube. These two pure checks catch the mixed-region
+# captures before they corrupt the facelet string.
+# ---------------------------------------------------------------------------
+
+# The gate's core signal (found by analysing real captures): on a GENUINE
+# face, every one of the 9 stickers IS one of the six calibrated colors, so
+# each sample sits close to its nearest calibrated reference in CIEDE2000. A
+# mis-detected mixed region instead samples gaps / edges / halfway-between
+# pixels, producing stickers that are FAR from every calibrated color. Real
+# clean stickers measured well under 15 dE from their reference; the real
+# mixed-region captures had several stickers at 20-29 dE.
+#
+# `max_sticker_distance` is how far one sticker may sit from its nearest
+# calibrated color before it counts as "off" (gap/edge/blur). `max_off_stickers`
+# is how many such off stickers a face may contain before it's judged a mixed
+# region rather than one face. One off sticker is tolerated (occasional glare /
+# a sample clipping a gap); two or more means the region isn't a clean face.
+#
+# `hard_ceiling_distance` is a stricter, single-sticker trip wire: a sticker
+# this far from EVERY calibrated color cannot plausibly be a real sticker under
+# normal glare (which stays well under this perceptually), so even ONE such
+# sticker rejects the reading. This catches an otherwise-mostly-clean mixed
+# region that happens to contain just one wildly off-cube sample.
+DEFAULT_MAX_STICKER_DISTANCE = 18.0
+DEFAULT_MAX_OFF_STICKERS = 1
+DEFAULT_HARD_CEILING_DISTANCE = 22.0
+
+
+@dataclass
+class FaceCoherence:
+    """Diagnostic for how plausible 9 samples are as one real cube face."""
+
+    face: str                       # face letter the CENTER classifies as
+    center_margin: float            # confidence gap of the center classification
+    sticker_distances: List[float]  # each sticker's distance to nearest color
+    off_stickers: int               # how many stickers are far from every color
+    color_counts: Dict[str, int]    # per-face classification counts over the 9
+    ok: bool
+    reason: str = ""
+
+
+def _nearest_reference_distance(
+    sample: RGB, classifier: ColorClassifier
+) -> float:
+    """CIEDE2000 distance from `sample` to its NEAREST calibrated color."""
+    return min(
+        classifier._dist(sample, ref) for ref in classifier.references.values()
+    )
+
+
+def face_coherence(
+    samples: Sequence[RGB],
+    classifier: ColorClassifier,
+    max_sticker_distance: float = DEFAULT_MAX_STICKER_DISTANCE,
+    max_off_stickers: int = DEFAULT_MAX_OFF_STICKERS,
+    hard_ceiling_distance: float = DEFAULT_HARD_CEILING_DISTANCE,
+) -> FaceCoherence:
+    """Judge whether 9 sticker samples plausibly belong to ONE cube face.
+
+    The physical check: every sticker on a real face is one of the six
+    calibrated cube colors, so every sample should sit CLOSE to its nearest
+    calibrated reference. Count the stickers that are far from EVERY calibrated
+    color -- those are gap / edge / mid-rotation samples. If too many stickers
+    are "off", the 9 points did not land on one clean face (the mis-detection
+    failure mode) and the reading is rejected.
+
+    This deliberately does NOT limit how many distinct colors a face shows: a
+    legally scrambled face can show all six, and every one of those stickers is
+    still close to a calibrated color, so it passes.
+
+    Pure: no camera, no OpenCV. Returns a FaceCoherence diagnostic so the
+    caller can show the user exactly why a face was rejected.
+    """
+    if len(samples) != 9:
+        return FaceCoherence(
+            face="", center_margin=0.0, sticker_distances=[], off_stickers=0,
+            color_counts={}, ok=False,
+            reason=f"expected 9 samples, got {len(samples)}",
+        )
+
+    center_face, center_margin = classifier.classify_with_confidence(samples[4])
+
+    counts: Dict[str, int] = {}
+    distances: List[float] = []
+    off = 0
+    for sample in samples:
+        label = classifier.classify(sample)
+        counts[label] = counts.get(label, 0) + 1
+        d = _nearest_reference_distance(sample, classifier)
+        distances.append(d)
+        if d > max_sticker_distance:
+            off += 1
+
+    worst = max(distances)
+    too_many_off = off > max_off_stickers
+    one_wildly_off = worst > hard_ceiling_distance
+    ok = not (too_many_off or one_wildly_off)
+    reason = ""
+    if not ok:
+        reason = (
+            f"{off} of 9 stickers don't match any calibrated color "
+            f"(worst {worst:.1f} dE); "
+            "looks like a mixed region or off-cube sample, not one clean face"
+        )
+
+    return FaceCoherence(
+        face=center_face,
+        center_margin=center_margin,
+        sticker_distances=distances,
+        off_stickers=off,
+        color_counts=counts,
+        ok=ok,
+        reason=reason,
+    )
 
 
 # How steady a face must be before we accept it, and how close two frames'
@@ -56,11 +183,22 @@ class SpinCollector:
     steady_frames: int = DEFAULT_STEADY_FRAMES
     steady_dist: float = DEFAULT_STEADY_DIST
 
+    # When True, reject candidates whose 9 samples don't look like one real
+    # face (see face_coherence). This is the sanity gate that stops a
+    # mis-detected mixed region from being accepted and corrupting the scan.
+    coherence_gate: bool = True
+    max_sticker_distance: float = DEFAULT_MAX_STICKER_DISTANCE
+    max_off_stickers: int = DEFAULT_MAX_OFF_STICKERS
+    hard_ceiling_distance: float = DEFAULT_HARD_CEILING_DISTANCE
+
     _collected: Dict[str, List[RGB]] = field(default_factory=dict)
     _streak_face: Optional[str] = None
     _streak_center: Optional[RGB] = None
     _streak_count: int = 0
     _last_accepted: Optional[str] = None
+    # Why the most recent candidate was rejected (empty if accepted/steadying).
+    # The camera layer surfaces this so the user knows to re-show a face.
+    last_rejection: str = ""
 
     # --- query ---
 
@@ -95,6 +233,26 @@ class SpinCollector:
         """
         center = candidate.center()
         face = self.classifier.classify(center)
+
+        # Sanity gate: a real face is internally coherent. Reject mixed-region
+        # captures (the mis-detection failure mode) BEFORE they can form a
+        # steady streak or be collected -- otherwise a garbled grid whose center
+        # merely happens to classify as some face corrupts the scan.
+        if self.coherence_gate and self.classifier.perceptual:
+            coherence = face_coherence(
+                candidate.samples,
+                self.classifier,
+                max_sticker_distance=self.max_sticker_distance,
+                max_off_stickers=self.max_off_stickers,
+                hard_ceiling_distance=self.hard_ceiling_distance,
+            )
+            if not coherence.ok:
+                self.last_rejection = coherence.reason
+                self._streak_face = None
+                self._streak_center = None
+                self._streak_count = 0
+                return None
+        self.last_rejection = ""
 
         # Is this the same face, held roughly as still, as the running streak?
         # Use the classifier's own metric: CIEDE2000 for a calibrated palette,
@@ -136,3 +294,4 @@ class SpinCollector:
         self._streak_center = None
         self._streak_count = 0
         self._last_accepted = None
+        self.last_rejection = ""
