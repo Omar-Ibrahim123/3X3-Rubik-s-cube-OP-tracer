@@ -35,7 +35,7 @@ RGB = Tuple[float, float, float]
 STANDARD_SCHEME: Dict[str, RGB] = {
     "U": (240, 240, 240),   # white  (neutral, low saturation)
     "D": (235, 205, 60),    # yellow (warm/pale: separates from orange by sat)
-    "F": (0, 150, 70),      # green
+    "F": (60, 160, 110),    # green  (pale/teal-ish to match real stickers)
     "B": (0, 90, 200),      # blue
     "R": (190, 30, 40),     # red
     "L": (235, 95, 5),      # orange (vivid)
@@ -92,10 +92,14 @@ def color_distance(a: RGB, b: RGB) -> float:
     h2, s2, v2 = rgb_to_hsv(b)
     sat_d = abs(s1 - s2)
     val_d = abs(v1 - v2)
-    # Hue only matters when both colors are saturated enough to have a hue.
-    hue_weight = min(s1, s2)
+    # Weight hue by the SAMPLE's own saturation (s1), not min(s1, s2). This is
+    # what lets a modestly-saturated color (e.g. a pale green at sat~0.3) be
+    # pushed away from an unsaturated WHITE reference (sat 0) on hue -- with
+    # min(), white's zero saturation cancelled the hue term and pale green
+    # collapsed onto white. Hue is weighted heavily so it dominates once the
+    # sample has any real color.
     hue_d = _hue_dist(h1, h2) / 180.0
-    return hue_weight * hue_d * 2.0 + sat_d * 1.5 + val_d * 0.3
+    return s1 * hue_d * 3.5 + sat_d * 1.0 + val_d * 0.25
 
 
 @dataclass
