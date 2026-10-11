@@ -464,16 +464,18 @@ def _sample_cell(frame, center: Tuple[int, int], half: int) -> RGB:
     return trimmed_median_color(rgb_pixels)
 
 
-def _sample_center_sticker(frame, center, half):
-    """Sample the CENTER sticker robustly against a printed logo.
+def _sample_center_sticker(frame, center, half, white_ref=None):
+    """Sample the CENTER sticker, using a printed logo as a WHITE signal.
 
-    Many cubes (e.g. GAN) print a logo on one center sticker; if that logo is a
-    saturated color (blue), sampling the dead center misreads the whole face.
-    We sample a slightly larger patch and return the DOMINANT color (majority
-    vote), so the sticker's true color wins over the minority logo pixels.
+    Many cubes (e.g. GAN) print a colored logo on the WHITE center sticker. We
+    use that as a positive signal: if the center patch has the 'bright-neutral
+    majority + saturated-minority logo' signature, this is the white face, so we
+    return white (the calibrated white_ref if given, else the patch's bright
+    majority). Otherwise we return the DOMINANT color (majority vote), which
+    ignores a small logo/glare on a colored center.
     """
     _, np = _lazy_imports()
-    from .detect import dominant_color
+    from .detect import dominant_color, has_logo_signature
 
     fh, fw = frame.shape[:2]
     x, y = int(round(center[0])), int(round(center[1]))
@@ -488,15 +490,29 @@ def _sample_center_sticker(frame, center, half):
         step = len(pix) // 600
         pix = pix[::step]
     rgb_pixels = [(float(p[2]), float(p[1]), float(p[0])) for p in pix]
+    if has_logo_signature(rgb_pixels):
+        # Logo present -> this is the white face. Return white so it classifies
+        # as U regardless of the logo's color.
+        if white_ref is not None:
+            return tuple(white_ref)
+        # Fallback: average the bright-neutral (white) pixels of the patch.
+        whites = [p for p in rgb_pixels
+                  if sum(p) / 3.0 > 150 and (max(p) - min(p)) / (sum(p) / 3.0) < 0.18]
+        if whites:
+            return tuple(sum(p[c] for p in whites) / len(whites) for c in range(3))
     return dominant_color(rgb_pixels)
 
 
-def _sample_face(frame, centers, patch_half):
-    """Sample all 9 stickers; the center (index 4) uses logo-robust sampling."""
+def _sample_face(frame, centers, patch_half, white_ref=None):
+    """Sample all 9 stickers; the center (index 4) uses logo-robust sampling.
+
+    `white_ref` (the calibrated white RGB) lets the center sampler return white
+    when it detects the logo-on-white signature.
+    """
     samples = []
     for i, c in enumerate(centers):
         if i == 4:
-            samples.append(_sample_center_sticker(frame, c, patch_half))
+            samples.append(_sample_center_sticker(frame, c, patch_half, white_ref))
         else:
             samples.append(_sample_cell(frame, c, patch_half))
     return samples
@@ -1011,7 +1027,8 @@ def spin_scan_auto(
 
             # ---- Phase B: spin collection via detection ----
             if detected:
-                samples = _sample_face(frame, centers, patch_half)
+                white_ref = classifier.references.get("U")
+                samples = _sample_face(frame, centers, patch_half, white_ref)
                 got = collector.offer(FaceCandidate(samples=samples))
                 if got:
                     just_got = got

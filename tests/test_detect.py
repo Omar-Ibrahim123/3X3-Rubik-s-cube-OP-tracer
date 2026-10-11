@@ -15,6 +15,7 @@ from vision.detect import (
     Square,
     detect_face_grid,
     dominant_color,
+    has_logo_signature,
     filter_similar_squares,
     find_cube_by_neighbors,
     is_sticker_blob,
@@ -250,6 +251,32 @@ def test_dominant_color_pure_patch():
 
 def test_dominant_color_empty():
     assert dominant_color([]) == (0.0, 0.0, 0.0)
+
+
+# --------------------------- has_logo_signature ---------------------------
+
+def test_logo_signature_detects_white_plus_logo():
+    # Real blue-cast white sticker + a blue logo blob -> white face.
+    patch = [(158.0, 184.0, 233.0)] * 72 + [(20.0, 110.0, 220.0)] * 28
+    assert has_logo_signature(patch)
+
+
+def test_logo_signature_not_triggered_by_plain_blue():
+    # A plain blue STICKER must not look like a white face with a blue logo
+    # (brightness is the discriminator: a blue sticker isn't bright).
+    assert not has_logo_signature([(0.0, 103.0, 223.0)] * 100)
+
+
+def test_logo_signature_not_triggered_by_plain_colors():
+    for rgb in [(158.0, 184.0, 233.0),   # plain white, no logo
+                (108.0, 170.0, 148.0),   # green
+                (159.0, 70.0, 103.0),    # red
+                (195.0, 216.0, 150.0)]:  # yellow
+        assert not has_logo_signature([rgb] * 100), rgb
+
+
+def test_logo_signature_empty():
+    assert not has_logo_signature([])
 
 
 # A 640x480 frame for area-fraction tests.
