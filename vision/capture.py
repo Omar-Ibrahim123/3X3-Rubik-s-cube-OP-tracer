@@ -982,6 +982,20 @@ def spin_scan_auto(
                         rgb = [f"({s[0]:.0f},{s[1]:.0f},{s[2]:.0f})"
                                for s in samples]
                         print(f"[debug] captured {got}: {rgb}")
+                elif debug:
+                    # Report what the CENTER currently classifies as (throttled),
+                    # so a face that never gets 'captured' (e.g. green mistaken
+                    # for an already-collected face) still shows its real reading.
+                    _dbg_tick = getattr(spin_scan_auto, "_dbg_tick", 0) + 1
+                    spin_scan_auto._dbg_tick = _dbg_tick
+                    if _dbg_tick % 15 == 0:
+                        cc = samples[4]
+                        face_now = classifier.classify(cc)
+                        on_screen = ("already have" if face_now
+                                     in collector.collected_faces() else "NEW")
+                        print(f"[debug] center=({cc[0]:.0f},{cc[1]:.0f},"
+                              f"{cc[2]:.0f}) -> {face_now} ({on_screen}); "
+                              f"collected={''.join(collector.collected_faces())}")
                 _draw_detection(disp, centers, classifier, debug)
 
             if just_got_ttl > 0:
