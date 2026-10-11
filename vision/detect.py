@@ -29,6 +29,38 @@ class Square:
     size: float  # side length in pixels (approx)
 
 
+def trimmed_median_color(
+    pixels: Sequence[Tuple[float, float, float]],
+    drop_dark: float = 0.25,
+    drop_bright: float = 0.10,
+) -> Tuple[float, float, float]:
+    """Robust color of a sticker patch, ignoring a logo and glare.
+
+    `pixels` is a list of (b, g, r) or (r, g, b) tuples from the sample patch.
+    We sort by brightness, drop the darkest `drop_dark` fraction (logo marks /
+    shadow) and the brightest `drop_bright` fraction (specular glare), and
+    return the per-channel median of what's left. A small central logo is a
+    minority of (dark) pixels and is discarded, so the sticker's true color
+    dominates. Channel order in = channel order out.
+
+    Pure Python so it's unit-tested; vision/capture.py uses the numpy
+    equivalent on real frames.
+    """
+    if not pixels:
+        return (0.0, 0.0, 0.0)
+    order = sorted(range(len(pixels)), key=lambda i: sum(pixels[i]))
+    lo = int(len(order) * drop_dark)
+    hi = int(len(order) * (1.0 - drop_bright))
+    keep = order[lo:hi] if hi > lo else order
+    out = []
+    for ch in range(3):
+        vals = sorted(pixels[i][ch] for i in keep)
+        n = len(vals)
+        mid = n // 2
+        out.append(vals[mid] if n % 2 else (vals[mid - 1] + vals[mid]) / 2.0)
+    return tuple(out)
+
+
 def is_sticker_blob(
     area: float,
     bbox_w: float,
