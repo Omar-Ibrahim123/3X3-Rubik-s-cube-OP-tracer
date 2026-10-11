@@ -29,6 +29,43 @@ class Square:
     size: float  # side length in pixels (approx)
 
 
+def has_logo_signature(
+    pixels: Sequence[Tuple[float, float, float]],
+    min_white_frac: float = 0.35,
+    min_logo_frac: float = 0.08,
+) -> bool:
+    """Detect the 'white sticker with a printed logo' signature.
+
+    On many cubes (e.g. GAN) the white CENTER sticker carries a colored logo.
+    Rather than fight to read white through it, we use the logo as a POSITIVE
+    signal: if a center patch contains BOTH a bright near-neutral majority
+    (the white sticker) AND a saturated minority blob (the logo), it is the
+    white face. This distinguishes it from a plain colored sticker (uniform,
+    no bright-neutral region) -- so a blue logo is not confused with a blue
+    sticker.
+
+    `pixels` are (r, g, b) in 0..255. Returns True if the white+logo signature
+    is present.
+    """
+    if not pixels:
+        return False
+    n = len(pixels)
+    white_n = 0
+    logo_n = 0
+    for (r, g, b) in pixels:
+        brightness = (r + g + b) / 3.0
+        spread = max(r, g, b) - min(r, g, b)
+        sat = spread / brightness if brightness > 0 else 0.0
+        # White sticker: BRIGHT (even a blue-cast white reads ~190 bright) with
+        # only mild color. Plain colored stickers are dimmer, so brightness is
+        # the key discriminator that keeps a blue sticker from counting here.
+        if brightness > 160 and sat < 0.5:
+            white_n += 1
+        elif sat > 0.7:
+            logo_n += 1            # strongly saturated => logo mark
+    return (white_n / n) >= min_white_frac and (logo_n / n) >= min_logo_frac
+
+
 def dominant_color(
     pixels: Sequence[Tuple[float, float, float]], bin_size: int = 48
 ) -> Tuple[float, float, float]:
