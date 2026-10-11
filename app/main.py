@@ -122,6 +122,21 @@ def cmd_save_frame(camera_index: int) -> int:
     return 0
 
 
+def cmd_analyze_frame(path: str) -> int:
+    """Run detection on a saved image and dump mask/annotated PNGs for tuning."""
+    from vision import capture  # lazy: only needs OpenCV here
+
+    try:
+        capture.analyze_frame(path)
+    except ImportError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
+    except (RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Old Pochmann BLD cube tracer")
     g = p.add_mutually_exclusive_group(required=True)
@@ -146,6 +161,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="save camera frames to PNG (for tuning/sharing detection)",
     )
     g.add_argument(
+        "--analyze-frame", metavar="PNG",
+        help="run detection on a saved image; dump mask/annotated PNGs for tuning",
+    )
+    g.add_argument(
         "--demo-tps", action="store_true",
         help="run the TPS counter playback demo",
     )
@@ -167,6 +186,8 @@ def main(argv=None) -> int:
         return cmd_demo_tps()
     if args.save_frame:
         return cmd_save_frame(args.camera)
+    if args.analyze_frame:
+        return cmd_analyze_frame(args.analyze_frame)
     if args.scan or args.scan_box or args.scan_manual:
         mode = "manual" if args.scan_manual else "box" if args.scan_box else "auto"
         return cmd_scan(args.camera, manual=mode, debug=args.debug)
