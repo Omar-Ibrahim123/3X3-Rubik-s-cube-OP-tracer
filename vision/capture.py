@@ -232,8 +232,8 @@ def analyze_dir(folder: str):
                 sub = edges[max(0, by):by + bbh, max(0, bx):bx + bbw]
                 dens = float((sub > 0).sum()) / sub.size if sub.size else 0.0
                 szpct = 100.0 * ((rw + rh) / 2.0) / w
-                if not reason and dens < 0.08:
-                    reason = f"edge-density {dens:.2f} < 0.08 (sparse: not a cube)"
+                if not reason and dens < 0.015:
+                    reason = f"edge-density {dens:.3f} < 0.015 (near-empty)"
                 print(f"      contour: size={szpct:.0f}%w "
                       f"aspect={max(rw,rh)/min(rw,rh):.2f} extent={extent:.2f} "
                       f"density={dens:.2f} center=({rcx:.0f},{rcy:.0f}) -> "
@@ -370,7 +370,10 @@ def _find_cube_face(frame, min_frac=0.02, max_frac=0.75):
         if sub.size == 0:
             continue
         density = float((sub > 0).sum()) / sub.size
-        if density < 0.08:  # too sparse to be a detail-packed cube face
+        # Real cubes measured ~0.02-0.05 edge density on actual frames, so the
+        # gate is only a floor to drop near-empty regions; squareness + extent +
+        # centrality (the score) do the real cube-vs-not discrimination.
+        if density < 0.015:
             continue
         if s <= best_score:
             continue
