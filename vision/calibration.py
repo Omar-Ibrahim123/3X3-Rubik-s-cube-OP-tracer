@@ -136,3 +136,41 @@ class PaletteCalibrationTracker:
         self._waiting_for_transition = not self.complete
         self.last_message = f"calibrated {face}"
         return face
+
+    def commit(self, center: RGB | None) -> str | None:
+        """Record `center` for the expected face NOW (explicit SPACE capture).
+
+        Unlike offer(), this does not wait for a steady run or a face
+        transition -- the user pressing SPACE IS the "this is the right face,
+        capture it" signal, which removes the auto-timing guesswork that caused
+        mis-sampled centres. The one guard that still matters is kept: the new
+        centre must be perceptually distinct (>= min_palette_distance) from
+        every already-calibrated colour, so a duplicate/wrong face is refused
+        with a clear message rather than silently recorded.
+
+        Returns the accepted face label, or None if nothing was recorded
+        (no face in view, already complete, or too close to an existing colour).
+        """
+        if self.complete:
+            return None
+        if center is None:
+            self.last_message = "no face detected -- line up the cube"
+            return None
+        nearest = min(
+            (rgb_distance(center, reference) for reference in self.palette.values()),
+            default=float("inf"),
+        )
+        if nearest < self.min_palette_distance:
+            self.last_message = (
+                f"that looks like an already-calibrated colour "
+                f"({nearest:.0f} dE); show the requested face"
+            )
+            return None
+        face = self.expected_face
+        self.palette[face] = tuple(center)
+        self._last_accepted = tuple(center)
+        self._stable.clear()
+        self._transition_count = 0
+        self._waiting_for_transition = False  # SPACE drives progression now
+        self.last_message = f"calibrated {face}"
+        return face

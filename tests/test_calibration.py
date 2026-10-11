@@ -91,3 +91,45 @@ def test_unstable_samples_do_not_calibrate():
     for sample in (U, R, U, F, U, B):
         tracker.offer(sample)
     assert tracker.palette == {}
+
+
+# --------------------------- SPACE-to-capture (commit) ---------------------------
+
+def test_commit_records_each_face_in_order_on_one_call():
+    # SPACE capture: a single commit() per face records it immediately, with no
+    # steady-run or transition wait.
+    tracker = PaletteCalibrationTracker()
+    accepted = []
+    for color in (U, R, F, D, L, B):
+        accepted.append(tracker.commit(color))
+    assert accepted == ["U", "R", "F", "D", "L", "B"]
+    assert tracker.complete
+    assert tracker.palette["R"] == R
+
+
+def test_commit_refuses_duplicate_color():
+    # A second face too close to an already-calibrated one is refused (this is
+    # the red-captured-as-white / blue-captured-wrong guard).
+    tracker = PaletteCalibrationTracker()
+    assert tracker.commit(U) == "U"
+    near_u = (U[0] + 3, U[1] - 2, U[2] + 1)  # ~a couple dE from U
+    assert tracker.commit(near_u) is None
+    assert tracker.expected_face == "R"
+    assert "already-calibrated" in tracker.last_message
+
+
+def test_commit_ignores_no_face():
+    tracker = PaletteCalibrationTracker()
+    assert tracker.commit(None) is None
+    assert tracker.expected_face == "U"
+    assert "no face" in tracker.last_message
+
+
+def test_commit_stops_when_complete():
+    tracker = PaletteCalibrationTracker()
+    for color in (U, R, F, D, L, B):
+        tracker.commit(color)
+    assert tracker.complete
+    # Any further commit is a no-op.
+    assert tracker.commit((123, 45, 67)) is None
+    assert len(tracker.palette) == 6
