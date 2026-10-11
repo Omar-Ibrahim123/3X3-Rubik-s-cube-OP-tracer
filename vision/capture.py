@@ -66,23 +66,33 @@ def _grid_cell_centers(frame_w: int, frame_h: int, box: int) -> List[Tuple[int, 
     """
     cx, cy = frame_w // 2, frame_h // 2
     step = box // 3
-    start_x = cx - step  # center of top-left cell
-    start_y = cy - step
+    # Cell centers sit at the MIDDLE of each 3x3 cell. The grid spans `box`
+    # centered on (cx, cy), so cell centers are offset by one step from center.
+    # (This must match the grid lines drawn in _draw_overlay, which start at
+    # cx - 3*step/2 -- cell centers are at that start + step/2 + col*step.)
+    start = -3 * step // 2
     centers = []
     for row in range(3):
         for col in range(3):
-            centers.append((start_x + col * step, start_y + row * step))
+            x = cx + start + step // 2 + col * step
+            y = cy + start + step // 2 + row * step
+            centers.append((x, y))
     return centers
 
 
 def _sample_cell(frame, center: Tuple[int, int], half: int) -> RGB:
-    """Average the color in a small square around `center`. Returns RGB."""
+    """Robustly sample a sticker color around `center`. Returns RGB.
+
+    Uses the MEDIAN over the patch (not mean) so the dark grid lines between
+    stickers, small specular highlights, or a stray edge don't drag the color.
+    """
     _, np = _lazy_imports()
     x, y = center
     patch = frame[y - half : y + half, x - half : x + half]
-    # OpenCV frames are BGR; return RGB.
-    mean_bgr = patch.reshape(-1, 3).mean(axis=0)
-    b, g, r = (float(v) for v in mean_bgr)
+    if patch.size == 0:
+        return (0.0, 0.0, 0.0)
+    med_bgr = np.median(patch.reshape(-1, 3), axis=0)
+    b, g, r = (float(v) for v in med_bgr)
     return (r, g, b)
 
 
@@ -390,14 +400,16 @@ def spin_scan_session(
     collector = None
     just_got = None
     just_got_ttl = 0
+    # Live-adjustable grid size so the 9 sample points land on the 9 stickers.
+    box_scale = box_frac
     try:
         while True:
             ok, frame = cap.read()
             if not ok:
                 raise RuntimeError("failed to read camera frame")
             h, w = frame.shape[:2]
-            box = int(min(w, h) * box_frac)
-            half = max(4, box // 12)
+            box = int(min(w, h) * box_scale)
+            half = max(3, box // 14)  # sample patch stays inside a sticker
             disp = frame.copy()
 
             if classifier is None:
@@ -405,10 +417,14 @@ def spin_scan_session(
                 center = (w // 2, h // 2)
                 _draw_overlay(
                     disp, [center], box // 3, half,
-                    "Show the WHITE face, press SPACE",
+                    "Show WHITE, SPACE to set.  +/- resize grid to your cube",
                 )
                 cv2.imshow(win, disp)
                 key = cv2.waitKey(1) & 0xFF
+                if key in (ord("+"), ord("=")):
+                    box_scale = min(0.95, box_scale + 0.03)
+                elif key in (ord("-"), ord("_")):
+                    box_scale = max(0.25, box_scale - 0.03)
                 if key in (ord(" "), 13):
                     white = _sample_cell(frame, center, half)
                     classifier = ColorClassifier.from_white_anchor(white)
@@ -442,6 +458,10 @@ def spin_scan_session(
                 _draw_live_classification(disp, cells, half, classifier)
             cv2.imshow(win, disp)
             key = cv2.waitKey(1) & 0xFF
+            if key in (ord("+"), ord("=")):
+                box_scale = min(0.95, box_scale + 0.03)
+            elif key in (ord("-"), ord("_")):
+                box_scale = max(0.25, box_scale - 0.03)
             if key in (ord("q"), 27):
                 raise KeyboardInterrupt("scan aborted")
             if collector.is_complete():

@@ -33,46 +33,69 @@ RGB = Tuple[float, float, float]
 # the white face: these references are rescaled to the user's lighting using
 # their measured white. Values are nominal sRGB-ish sticker colors.
 STANDARD_SCHEME: Dict[str, RGB] = {
-    "U": (245, 245, 245),   # white
-    "D": (255, 213, 0),     # yellow
-    "F": (0, 158, 73),      # green
-    "B": (0, 70, 173),      # blue
-    "R": (196, 30, 45),     # red
-    "L": (255, 88, 0),      # orange
+    "U": (240, 240, 240),   # white  (neutral, low saturation)
+    "D": (235, 205, 60),    # yellow (warm/pale: separates from orange by sat)
+    "F": (0, 150, 70),      # green
+    "B": (0, 90, 200),      # blue
+    "R": (190, 30, 40),     # red
+    "L": (235, 95, 5),      # orange (vivid)
 }
 
 
 # ---------------------------------------------------------------------------
-# Color distance in a lighting-tolerant space.
+# Color comparison in HSV, after white-balancing.
 #
-# Pure Euclidean RGB distance is sensitive to brightness. We reduce that by
-# comparing colors in a space that separates chroma (hue-ish direction) from
-# overall brightness: normalize each color to unit length (direction) and also
-# keep a mild brightness term. This handles shadows/highlights far better than
-# raw RGB while needing no external libraries.
+# Real webcam/lighting findings (from debug captures): lighting adds a strong
+# color cast (e.g. blue), which shifts every sticker and makes white/yellow and
+# red/orange collide in raw RGB. Two fixes, in order:
+#
+#   1. White-balance: using the measured WHITE sample, scale each channel so
+#      white becomes neutral. This removes the cast from EVERY sample.
+#   2. Compare in HSV: hue+saturation separate the six cube colors far better
+#      than RGB. White = very low saturation; yellow/orange/red differ mainly
+#      in hue; this cleanly splits the pairs that confuse RGB distance.
 # ---------------------------------------------------------------------------
 
-def _normalize(c: RGB) -> Tuple[float, float, float, float]:
-    r, g, b = c
-    mag = (r * r + g * g + b * b) ** 0.5
-    if mag == 0:
-        return (0.0, 0.0, 0.0, 0.0)
-    # unit direction (chroma/hue) + normalized brightness (0..1)
-    return (r / mag, g / mag, b / mag, mag / (255.0 * (3 ** 0.5)))
+def rgb_to_hsv(c: RGB) -> Tuple[float, float, float]:
+    """Convert RGB (0..255) to HSV with H in [0,360), S,V in [0,1]."""
+    r, g, b = (max(0.0, min(255.0, x)) / 255.0 for x in c)
+    mx = max(r, g, b)
+    mn = min(r, g, b)
+    diff = mx - mn
+    if diff == 0:
+        h = 0.0
+    elif mx == r:
+        h = (60 * ((g - b) / diff)) % 360
+    elif mx == g:
+        h = 60 * ((b - r) / diff) + 120
+    else:
+        h = 60 * ((r - g) / diff) + 240
+    s = 0.0 if mx == 0 else diff / mx
+    v = mx
+    return (h, s, v)
+
+
+def _hue_dist(h1: float, h2: float) -> float:
+    """Circular hue distance in degrees, 0..180."""
+    d = abs(h1 - h2) % 360
+    return min(d, 360 - d)
 
 
 def color_distance(a: RGB, b: RGB) -> float:
-    """Lighting-tolerant distance between two RGB colors.
+    """Perceptual-ish distance between two RGB colors via HSV.
 
-    Direction (hue) is weighted more heavily than brightness, so a sticker in
-    shadow still matches its calibrated reference.
+    White (low saturation) is handled specially: if either color is nearly
+    unsaturated, saturation dominates (so white never matches a vivid color on
+    hue alone). Otherwise hue dominates, with a mild saturation/value term.
     """
-    na = _normalize(a)
-    nb = _normalize(b)
-    # Weight hue/direction strongly, brightness weakly.
-    dir_d = sum((na[i] - nb[i]) ** 2 for i in range(3)) ** 0.5
-    bright_d = abs(na[3] - nb[3])
-    return dir_d + 0.25 * bright_d
+    h1, s1, v1 = rgb_to_hsv(a)
+    h2, s2, v2 = rgb_to_hsv(b)
+    sat_d = abs(s1 - s2)
+    val_d = abs(v1 - v2)
+    # Hue only matters when both colors are saturated enough to have a hue.
+    hue_weight = min(s1, s2)
+    hue_d = _hue_dist(h1, h2) / 180.0
+    return hue_weight * hue_d * 2.0 + sat_d * 1.5 + val_d * 0.3
 
 
 @dataclass
@@ -85,55 +108,54 @@ class ColorClassifier:
     """
 
     references: Dict[str, RGB] = field(default_factory=dict)
+    # Per-channel white-balance gains applied to every sample before comparing.
+    # Default (1,1,1) = no correction. from_white_anchor() sets these from the
+    # measured white so the user's lighting cast is removed.
+    wb_gains: Tuple[float, float, float] = (1.0, 1.0, 1.0)
 
     @classmethod
     def from_centers(cls, centers: Dict[str, RGB]) -> "ColorClassifier":
-        """Build a classifier from the six calibrated center colors."""
+        """Build a classifier from the six calibrated center colors.
+
+        White-balance is derived from the measured white (U) center so the
+        same cast correction applies as in the single-white flow.
+        """
         missing = set(FACE_NAMES) - set(centers)
         if missing:
             raise ValueError(f"calibration missing faces: {sorted(missing)}")
-        return cls(references=dict(centers))
+        gains = _wb_gains_from_white(centers["U"])
+        return cls(references=dict(centers), wb_gains=gains)
 
     @classmethod
     def from_white_anchor(cls, white_sample: RGB) -> "ColorClassifier":
         """Build a classifier from a single measured WHITE sample.
 
         Low-friction calibration: the user shows only the white (U) face. We
-        take the built-in BOY/Western reference colors (STANDARD_SCHEME) and
-        rescale every channel by how the user's measured white differs from
-        canonical white. This adapts all six references to the user's lighting
-        and white balance from one sample, so orange/red etc. shift the same
-        way the white did.
+        compute white-balance gains that neutralize the measured white (removing
+        the lighting cast), then classify every sample in that corrected space
+        against the canonical BOY/Western references. Correcting the cast on the
+        INPUT (rather than tinting the references) is what makes white/yellow and
+        red/orange separate reliably under colored lighting.
 
         Assumes the standard (BOY/Western) color scheme. If a cube uses a
         different scheme, use from_centers() (the manual multi-center flow).
         """
-        canonical_white = STANDARD_SCHEME["U"]
-        # Per-channel gain so measured white maps onto canonical white's shape.
-        # Guard against zero channels; clamp gains to a sane range so a bad
-        # white reading can't blow up the references.
-        gains = []
-        for i in range(3):
-            cw = canonical_white[i]
-            ws = white_sample[i]
-            g = (ws / cw) if cw else 1.0
-            g = max(0.3, min(g, 3.0))
-            gains.append(g)
-        refs: Dict[str, RGB] = {}
-        for face, ref in STANDARD_SCHEME.items():
-            refs[face] = tuple(
-                max(0.0, min(255.0, ref[i] * gains[i])) for i in range(3)
-            )
-        return cls(references=refs)
+        gains = _wb_gains_from_white(white_sample)
+        return cls(references=dict(STANDARD_SCHEME), wb_gains=gains)
+
+    def _balance(self, sample: RGB) -> RGB:
+        g = self.wb_gains
+        return tuple(max(0.0, min(255.0, sample[i] * g[i])) for i in range(3))
 
     def classify(self, sample: RGB) -> str:
-        """Return the face letter whose calibrated color is nearest `sample`."""
+        """Return the face letter whose reference is nearest the WB'd sample."""
         if not self.references:
             raise RuntimeError("classifier is not calibrated")
+        s = self._balance(sample)
         best_face = None
         best_dist = float("inf")
         for face, ref in self.references.items():
-            d = color_distance(sample, ref)
+            d = color_distance(s, ref)
             if d < best_dist:
                 best_dist = d
                 best_face = face
@@ -145,13 +167,30 @@ class ColorClassifier:
         A small margin means the sample is ambiguous (e.g. a borderline
         orange/red), which the capture layer can surface for a re-scan.
         """
+        s = self._balance(sample)
         dists = sorted(
-            (color_distance(sample, ref), face)
+            (color_distance(s, ref), face)
             for face, ref in self.references.items()
         )
         best_d, best_face = dists[0]
         second_d = dists[1][0] if len(dists) > 1 else float("inf")
         return best_face, (second_d - best_d)
+
+
+def _wb_gains_from_white(white: RGB) -> Tuple[float, float, float]:
+    """Per-channel gains that make a measured white sample neutral gray.
+
+    Scales each channel toward the sample's own average brightness, so the
+    corrected white has equal R=G=B. Gains are clamped so a bad white reading
+    (e.g. lens covered) can't blow up subsequent samples.
+    """
+    avg = sum(white) / 3.0
+    gains = []
+    for i in range(3):
+        c = white[i]
+        g = (avg / c) if c else 1.0
+        gains.append(max(0.3, min(g, 3.0)))
+    return tuple(gains)
 
 
 # ---------------------------------------------------------------------------
