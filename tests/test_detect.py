@@ -17,9 +17,51 @@ from vision.detect import (
     filter_similar_squares,
     is_sticker_blob,
     pick_white_reference,
+    score_face_candidate,
     subdivide_face,
     trimmed_median_color,
 )
+
+
+# --------------------------- score_face_candidate ---------------------------
+
+FW, FH = 640.0, 480.0
+
+
+def test_score_central_square_beats_edge_square():
+    # Same-sized square: one centered, one hugging the left edge.
+    center = score_face_candidate(320, 240, 180, 180, 0.9, FW, FH)
+    edge = score_face_candidate(60, 240, 180, 180, 0.9, FW, FH)
+    assert center > edge > 0
+
+
+def test_score_rejects_non_square():
+    assert score_face_candidate(320, 240, 300, 120, 0.9, FW, FH) == 0.0
+
+
+def test_score_rejects_poor_fill():
+    # A blobby region that doesn't fill its bounding rect (skin/wall splotch).
+    assert score_face_candidate(320, 240, 180, 180, 0.4, FW, FH) == 0.0
+
+
+def test_score_accepts_close_and_far_cube():
+    # Close: cube ~45% of width. Far: cube ~18% of width. Both should score > 0.
+    close = score_face_candidate(320, 240, 290, 290, 0.9, FW, FH)
+    far = score_face_candidate(320, 240, 115, 115, 0.9, FW, FH)
+    assert close > 0 and far > 0
+
+
+def test_score_rejects_whole_frame_grab():
+    # A region covering almost the entire frame is not a held cube.
+    assert score_face_candidate(320, 240, 630, 470, 0.9, FW, FH) == 0.0
+
+
+def test_score_prefers_central_cube_over_corner_poster():
+    # A vivid square poster in the corner must lose to a central cube, even if
+    # the poster is a touch bigger.
+    cube = score_face_candidate(320, 240, 200, 200, 0.85, FW, FH)
+    poster = score_face_candidate(590, 60, 210, 210, 0.9, FW, FH)
+    assert cube > poster
 
 
 # --------------------------- pick_white_reference ---------------------------

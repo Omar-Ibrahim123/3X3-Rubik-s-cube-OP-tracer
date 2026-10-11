@@ -168,6 +168,59 @@ def analyze_frame(path: str):
     return mask_path, annot_path
 
 
+def analyze_dir(folder: str):
+    """Run detection on every image in a folder; print a pass/fail summary.
+
+    Batch-tuning harness: lets detection be evaluated against many real frames
+    at once (close/medium/far, different faces, some tilt) so a change can be
+    checked for not breaking some distances while fixing others. For each image
+    prints whether a cube face was detected and its size/center; writes an
+    _annotated.png for each. Skips files that already end in _mask/_annotated.
+    """
+    import glob
+    import os
+
+    cv2, _ = _lazy_imports()
+
+    paths = sorted(
+        p for p in glob.glob(os.path.join(folder, "*.png"))
+        if not p.endswith(("_mask.png", "_annotated.png"))
+    )
+    if not paths:
+        print(f"no .png frames found in {folder}")
+        return
+    detected = 0
+    print(f"Analyzing {len(paths)} frame(s) in {folder}:\n")
+    for path in paths:
+        frame = cv2.imread(path)
+        if frame is None:
+            print(f"  {os.path.basename(path)}: could not read")
+            continue
+        h, w = frame.shape[:2]
+        face = _find_cube_face(frame)
+        centers = _detect_face_centers(frame)
+        name = os.path.basename(path)
+        if face is not None and centers is not None:
+            detected += 1
+            fcx, fcy, fsize, _ = face
+            print(f"  {name}: DETECTED  size={fsize:.0f}px "
+                  f"({100.0 * fsize / w:.0f}% of width)  "
+                  f"center=({fcx:.0f},{fcy:.0f})")
+        else:
+            print(f"  {name}: not detected")
+        disp = frame.copy()
+        if face is not None:
+            cv2.circle(disp, (int(face[0]), int(face[1])), int(face[2] / 2),
+                       (255, 0, 255), 2)
+        if centers is not None:
+            for (x, y) in centers:
+                cv2.circle(disp, (int(x), int(y)), 8, (0, 255, 0), 2)
+        base, _ = os.path.splitext(path)
+        cv2.imwrite(base + "_annotated.png", disp)
+    print(f"\n{detected}/{len(paths)} frames detected. "
+          f"Annotated images written next to each frame.")
+
+
 def _sticker_mask(frame):
     """Binary mask of sticker-like pixels (vivid OR bright), gaps removed.
 
@@ -216,32 +269,27 @@ def _find_cube_face(frame, min_frac=0.02, max_frac=0.75):
     import math
 
     cv2, np = _lazy_imports()
+    from .detect import score_face_candidate
+
     h, w = frame.shape[:2]
-    frame_area = float(h * w)
     mask = _sticker_mask(frame)
     contours, _ = cv2.findContours(
         mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
     best = None
-    best_area = 0.0
+    best_score = 0.0
     for c in contours:
         a = cv2.contourArea(c)
-        if a < frame_area * min_frac or a > frame_area * max_frac:
-            continue
         rect = cv2.minAreaRect(c)  # ((cx,cy),(rw,rh),angle_deg)
         (rcx, rcy), (rw, rh), ang = rect
         if rw <= 0 or rh <= 0:
             continue
-        aspect = max(rw, rh) / min(rw, rh)
-        if aspect > 1.35:  # the cube face is close to square
-            continue
-        # How well does the contour fill its rotated rect? A real face fills it
-        # well (~0.8+); an irregular skin/wall splotch does not.
         extent = a / (rw * rh)
-        if extent < 0.70:
-            continue
-        if a > best_area:
-            best_area = a
+        # Score centrality + squareness + fill + size; busy-background regions
+        # at the edges score low or are rejected (returns 0).
+        s = score_face_candidate(rcx, rcy, rw, rh, extent, float(w), float(h))
+        if s > best_score:
+            best_score = s
             size = (rw + rh) / 2.0
             best = (rcx, rcy, size, math.radians(ang))
     return best
