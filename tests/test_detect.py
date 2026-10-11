@@ -9,13 +9,48 @@ import math
 
 import pytest
 
+import math
+
 from vision.detect import (
     Square,
     detect_face_grid,
     filter_similar_squares,
     is_sticker_blob,
+    subdivide_face,
     trimmed_median_color,
 )
+
+
+# --------------------------- subdivide_face ---------------------------
+
+def test_subdivide_upright_face_reading_order():
+    # Face centered at (300,300), side 150 -> step 50, cells at +/-50.
+    centers = subdivide_face(300, 300, 150, angle=0.0)
+    assert len(centers) == 9
+    # Top-left cell, bottom-right cell.
+    assert centers[0] == pytest.approx((250, 250))
+    assert centers[4] == pytest.approx((300, 300))  # face center
+    assert centers[8] == pytest.approx((350, 350))
+    # Reading order: rows top->bottom, cols left->right.
+    rows = [centers[0:3], centers[3:6], centers[6:9]]
+    for row in rows:
+        xs = [p[0] for p in row]
+        assert xs == sorted(xs)
+    assert rows[0][0][1] < rows[2][0][1]
+
+
+def test_subdivide_rotated_face_keeps_9_centers_near_face():
+    centers = subdivide_face(300, 300, 150, angle=math.radians(10))
+    assert len(centers) == 9
+    # All cells stay within ~size of the face center.
+    for (x, y) in centers:
+        assert math.hypot(x - 300, y - 300) <= 150
+
+
+def test_subdivide_center_cell_is_face_center_any_angle():
+    for deg in (-30, -10, 0, 15, 40):
+        centers = subdivide_face(100, 200, 90, angle=math.radians(deg))
+        assert centers[4] == pytest.approx((100, 200))
 
 
 # --------------------------- trimmed_median_color ---------------------------

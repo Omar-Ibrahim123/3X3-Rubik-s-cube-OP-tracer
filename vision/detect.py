@@ -61,6 +61,34 @@ def trimmed_median_color(
     return tuple(out)
 
 
+def subdivide_face(
+    cx: float, cy: float, size: float, angle: float = 0.0
+) -> List[Tuple[float, float]]:
+    """Given a cube FACE square, return its 9 sticker-cell centers.
+
+    This is the robust approach: rather than detecting 9 separate stickers
+    (which keep merging in the mask), detect the one big cube square and divide
+    it into a 3x3 grid. `(cx, cy)` is the face center, `size` the full face side
+    length, `angle` an optional rotation (radians) for a tilted cube.
+
+    Returns 9 (x, y) centers in reading order (row-major, top-left first). Cell
+    centers sit at +/- size/3 from the face center along the (rotated) axes.
+    """
+    import math
+
+    step = size / 3.0
+    ca, sa = math.cos(angle), math.sin(angle)
+    centers: List[Tuple[float, float]] = []
+    for row in (-1, 0, 1):
+        for col in (-1, 0, 1):
+            dx = col * step
+            dy = row * step
+            rx = dx * ca - dy * sa
+            ry = dx * sa + dy * ca
+            centers.append((cx + rx, cy + ry))
+    return centers
+
+
 def is_sticker_blob(
     area: float,
     bbox_w: float,

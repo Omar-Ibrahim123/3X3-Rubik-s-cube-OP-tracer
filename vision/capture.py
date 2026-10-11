@@ -85,9 +85,8 @@ def save_frames(camera_index: int = 0, out_dir: str = "frames"):
                 raise RuntimeError("failed to read camera frame")
             disp = frame.copy()
             # Show what the current detector sees, so detection is visible live.
-            squares = _find_sticker_blobs(frame)
-            centers = detect_face_grid(squares)
-            cv2.putText(disp, f"regions found: {len(squares)}  (hold cube CLOSE)",
+            centers = _detect_face_centers(frame)
+            cv2.putText(disp, "hold cube CLOSE, square to camera",
                         (20, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255),
                         2, cv2.LINE_AA)
             if centers is not None:
@@ -128,7 +127,6 @@ def analyze_frame(path: str):
     import os
 
     cv2, np = _lazy_imports()
-    from .detect import detect_face_grid, filter_similar_squares
 
     frame = cv2.imread(path)
     if frame is None:
@@ -140,25 +138,23 @@ def analyze_frame(path: str):
     white_px = int((mask > 0).sum())
     print(f"mask: {100.0 * white_px / (h * w):.1f}% of pixels are 'sticker-like'")
 
-    squares = _find_sticker_blobs(frame)
-    print(f"candidate sticker blobs found: {len(squares)}")
-    for i, s in enumerate(squares):
-        print(f"  blob {i}: center=({s.cx:.0f},{s.cy:.0f}) size={s.size:.0f}px")
-    kept = filter_similar_squares(squares)
-    print(f"after size-similarity filter: {len(kept)}")
+    face = _find_cube_face(frame)
+    if face is None:
+        print("no cube face found")
+    else:
+        fcx, fcy, fsize, fang = face
+        import math
+        print(f"cube face: center=({fcx:.0f},{fcy:.0f}) size={fsize:.0f}px "
+              f"angle={math.degrees(fang):.1f}deg")
 
-    centers = detect_face_grid(squares)
-    print("FACE DETECTED (3x3 grid found)" if centers else "no 3x3 face detected")
+    centers = _detect_face_centers(frame)
+    print("FACE DETECTED (3x3 grid placed)" if centers else "no face detected")
 
-    # Annotated image.
+    # Annotated image: cube square + the 9 subdivided cell centers.
     disp = frame.copy()
-    for s in squares:
-        cv2.rectangle(
-            disp,
-            (int(s.cx - s.size / 2), int(s.cy - s.size / 2)),
-            (int(s.cx + s.size / 2), int(s.cy + s.size / 2)),
-            (255, 0, 255), 2,
-        )
+    if face is not None:
+        cv2.circle(disp, (int(face[0]), int(face[1])), int(face[2] / 2),
+                   (255, 0, 255), 2)
     if centers:
         for (x, y) in centers:
             cv2.circle(disp, (int(x), int(y)), 10, (0, 255, 0), 3)
@@ -203,6 +199,73 @@ def _sticker_mask(frame):
     if contours:
         cv2.drawContours(mask, contours, -1, 255, thickness=cv2.FILLED)
     return mask
+
+
+def _find_cube_face(frame, min_frac=0.02, max_frac=0.75):
+    """Find the cube FACE as one big square, return (cx, cy, size, angle_rad).
+
+    The robust approach: the mask renders the whole face as a single solid
+    square (the 9 stickers fused). Instead of fighting that to separate
+    stickers, we embrace it -- find the largest square-ish region (the cube) and
+    subdivide it into a 3x3 grid elsewhere. Returns None if no plausible face.
+
+    Picks the largest contour whose minimum-area rotated rect is roughly square
+    and sized like a close-held cube (a fraction of the frame). Returns the
+    rect's center, side length (mean of the two sides), and rotation in radians.
+    """
+    import math
+
+    cv2, np = _lazy_imports()
+    h, w = frame.shape[:2]
+    frame_area = float(h * w)
+    mask = _sticker_mask(frame)
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    best = None
+    best_area = 0.0
+    for c in contours:
+        a = cv2.contourArea(c)
+        if a < frame_area * min_frac or a > frame_area * max_frac:
+            continue
+        rect = cv2.minAreaRect(c)  # ((cx,cy),(rw,rh),angle_deg)
+        (rcx, rcy), (rw, rh), ang = rect
+        if rw <= 0 or rh <= 0:
+            continue
+        aspect = max(rw, rh) / min(rw, rh)
+        if aspect > 1.35:  # the cube face is close to square
+            continue
+        # How well does the contour fill its rotated rect? A real face fills it
+        # well (~0.8+); an irregular skin/wall splotch does not.
+        extent = a / (rw * rh)
+        if extent < 0.70:
+            continue
+        if a > best_area:
+            best_area = a
+            size = (rw + rh) / 2.0
+            best = (rcx, rcy, size, math.radians(ang))
+    return best
+
+
+def _detect_face_centers(frame):
+    """Return the 9 sticker-cell centers of the detected cube face, or None.
+
+    Finds the cube's outer square and subdivides it into a 3x3 grid. This is the
+    detection used by the scan flows. `angle` from minAreaRect is normalized to
+    a small tilt so a near-upright cube subdivides correctly.
+    """
+    import math
+
+    face = _find_cube_face(frame)
+    if face is None:
+        return None
+    cx, cy, size, angle = face
+    # Normalize the rect angle to [-45, 45] deg: a square's orientation is
+    # ambiguous mod 90, and we only need the small tilt from upright.
+    deg = math.degrees(angle)
+    deg = ((deg + 45) % 90) - 45
+    from .detect import subdivide_face
+    return subdivide_face(cx, cy, size, math.radians(deg))
 
 
 def _find_sticker_blobs(frame, min_frac=0.004, max_frac=0.09):
@@ -763,30 +826,20 @@ def spin_scan_auto(
             if not ok:
                 raise RuntimeError("failed to read camera frame")
             disp = frame.copy()
-            squares = _find_sticker_blobs(frame)
-            centers = detect_face_grid(squares)
+            face = _find_cube_face(frame)
+            centers = _detect_face_centers(frame)
             detected = centers is not None
-            # Scale the sampling patch to the detected sticker size.
-            if detected and squares:
-                from .detect import filter_similar_squares, _median
-                sizes = [s.size for s in filter_similar_squares(squares)]
-                if sizes:
-                    patch_half = max(4, int(_median(sizes) * 0.25))
+            # Scale the sampling patch to the detected sticker (cell) size.
+            if face is not None:
+                patch_half = max(4, int((face[2] / 3.0) * 0.3))
 
-            # In debug, show the detection mask + draw ALL candidate blobs, so
-            # we can see what the detector is keying on and tune thresholds.
+            # In debug, show the detection mask + the found cube square, so we
+            # can see what the detector is keying on.
             if debug:
                 cv2.imshow("detection mask", _sticker_mask(frame))
-                for sq in squares:
-                    cv2.rectangle(
-                        disp,
-                        (int(sq.cx - sq.size / 2), int(sq.cy - sq.size / 2)),
-                        (int(sq.cx + sq.size / 2), int(sq.cy + sq.size / 2)),
-                        (255, 0, 255), 1,
-                    )
-                cv2.putText(disp, f"regions: {len(squares)}", (20, 110),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2,
-                            cv2.LINE_AA)
+                if face is not None:
+                    cv2.circle(disp, (int(face[0]), int(face[1])),
+                               int(face[2] / 2), (255, 0, 255), 2)
 
             if classifier is None:
                 # ---- Phase A: white calibration via detection ----
