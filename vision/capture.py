@@ -189,6 +189,8 @@ def analyze_dir(folder: str):
     if not paths:
         print(f"no .png frames found in {folder}")
         return
+    from .detect import score_face_candidate_debug
+
     detected = 0
     print(f"Analyzing {len(paths)} frame(s) in {folder}:\n")
     for path in paths:
@@ -197,17 +199,41 @@ def analyze_dir(folder: str):
             print(f"  {os.path.basename(path)}: could not read")
             continue
         h, w = frame.shape[:2]
+        name = os.path.basename(path)
         face = _find_cube_face(frame)
         centers = _detect_face_centers(frame)
-        name = os.path.basename(path)
+
         if face is not None and centers is not None:
             detected += 1
             fcx, fcy, fsize, _ = face
             print(f"  {name}: DETECTED  size={fsize:.0f}px "
-                  f"({100.0 * fsize / w:.0f}% of width)  "
-                  f"center=({fcx:.0f},{fcy:.0f})")
+                  f"({100.0 * fsize / w:.0f}% of width)")
         else:
-            print(f"  {name}: not detected")
+            # Diagnostic: show the top contours by area and why each was
+            # rejected, so detection can be tuned against reality.
+            print(f"  {name}: NOT detected")
+            mask = _sticker_mask(frame)
+            contours, _ = cv2.findContours(
+                mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            cs = sorted(contours, key=cv2.contourArea, reverse=True)[:4]
+            if not cs:
+                print("      (no contours in mask at all)")
+            for c in cs:
+                a = cv2.contourArea(c)
+                (rcx, rcy), (rw, rh), _ = cv2.minAreaRect(c)
+                if rw <= 0 or rh <= 0:
+                    continue
+                extent = a / (rw * rh)
+                _, reason = score_face_candidate_debug(
+                    rcx, rcy, rw, rh, extent, float(w), float(h)
+                )
+                szpct = 100.0 * ((rw + rh) / 2.0) / w
+                print(f"      contour: size={szpct:.0f}%w "
+                      f"aspect={max(rw,rh)/min(rw,rh):.2f} extent={extent:.2f} "
+                      f"center=({rcx:.0f},{rcy:.0f}) -> "
+                      f"{reason or 'ACCEPTED?'}")
+
         disp = frame.copy()
         if face is not None:
             cv2.circle(disp, (int(face[0]), int(face[1])), int(face[2] / 2),
@@ -217,8 +243,9 @@ def analyze_dir(folder: str):
                 cv2.circle(disp, (int(x), int(y)), 8, (0, 255, 0), 2)
         base, _ = os.path.splitext(path)
         cv2.imwrite(base + "_annotated.png", disp)
+        cv2.imwrite(base + "_mask.png", _sticker_mask(frame))
     print(f"\n{detected}/{len(paths)} frames detected. "
-          f"Annotated images written next to each frame.")
+          f"Annotated + mask images written next to each frame.")
 
 
 def _sticker_mask(frame):

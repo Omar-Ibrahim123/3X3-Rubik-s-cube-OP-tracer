@@ -99,6 +99,30 @@ def trimmed_median_color(
     return tuple(out)
 
 
+def score_face_candidate_debug(
+    rcx: float, rcy: float, rw: float, rh: float, extent: float,
+    frame_w: float, frame_h: float,
+):
+    """Like score_face_candidate but also returns a human reject reason.
+
+    Returns (score, reason). reason is '' if accepted, else which gate failed.
+    Used by the batch harness to show WHY frames are rejected.
+    """
+    if rw <= 0 or rh <= 0 or frame_w <= 0 or frame_h <= 0:
+        return 0.0, "degenerate size"
+    frame_area = frame_w * frame_h
+    area = rw * rh
+    size_frac = area / frame_area
+    aspect = max(rw, rh) / min(rw, rh)
+    if aspect > 1.4:
+        return 0.0, f"aspect {aspect:.2f} > 1.4 (not square)"
+    if extent < 0.68:
+        return 0.0, f"extent {extent:.2f} < 0.68 (poorly filled)"
+    if not (0.015 <= size_frac <= 0.95):
+        return 0.0, f"size_frac {size_frac:.3f} out of [0.015, 0.95]"
+    return score_face_candidate(rcx, rcy, rw, rh, extent, frame_w, frame_h), ""
+
+
 def score_face_candidate(
     rcx: float, rcy: float, rw: float, rh: float, extent: float,
     frame_w: float, frame_h: float,
