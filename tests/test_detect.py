@@ -16,16 +16,62 @@ from vision.detect import (
     detect_face_grid,
     filter_similar_squares,
     is_sticker_blob,
+    pick_white_reference,
     subdivide_face,
     trimmed_median_color,
 )
 
 
+# --------------------------- pick_white_reference ---------------------------
+
+def test_pick_white_from_scrambled_face():
+    # Center (index 4) is the only white; the other 8 are random vivid colors.
+    samples = [
+        (200.0, 30.0, 40.0),   # red
+        (0.0, 150.0, 70.0),    # green
+        (255.0, 140.0, 0.0),   # orange
+        (0.0, 90.0, 200.0),    # blue
+        (238.0, 240.0, 236.0), # WHITE center
+        (255.0, 210.0, 0.0),   # yellow
+        (0.0, 150.0, 70.0),    # green
+        (200.0, 30.0, 40.0),   # red
+        (0.0, 90.0, 200.0),    # blue
+    ]
+    white = pick_white_reference(samples)
+    assert white == (238.0, 240.0, 236.0)
+
+
+def test_pick_white_prefers_neutral_over_bright_colored():
+    # A very bright yellow (high brightness) must NOT beat a slightly dimmer
+    # neutral white, because yellow has large channel spread.
+    samples = [
+        (250.0, 250.0, 40.0),   # bright yellow (big spread)
+        (225.0, 228.0, 223.0),  # white (neutral)
+    ]
+    assert pick_white_reference(samples) == (225.0, 228.0, 223.0)
+
+
+def test_pick_white_empty():
+    assert pick_white_reference([]) == (255.0, 255.0, 255.0)
+
+
+# --------------------------- subdivide inset ---------------------------
+
+def test_subdivide_inset_pulls_outer_cells_inward():
+    full = subdivide_face(300, 300, 300, inset=1.0)
+    inset = subdivide_face(300, 300, 300, inset=0.8)
+    # Center cell unchanged; a corner cell is closer to center with inset.
+    assert inset[4] == pytest.approx(full[4])
+    d_full = math.hypot(full[0][0] - 300, full[0][1] - 300)
+    d_inset = math.hypot(inset[0][0] - 300, inset[0][1] - 300)
+    assert d_inset < d_full
+
+
 # --------------------------- subdivide_face ---------------------------
 
 def test_subdivide_upright_face_reading_order():
-    # Face centered at (300,300), side 150 -> step 50, cells at +/-50.
-    centers = subdivide_face(300, 300, 150, angle=0.0)
+    # Face centered at (300,300), side 150, inset=1.0 -> step 50, cells at +/-50.
+    centers = subdivide_face(300, 300, 150, angle=0.0, inset=1.0)
     assert len(centers) == 9
     # Top-left cell, bottom-right cell.
     assert centers[0] == pytest.approx((250, 250))

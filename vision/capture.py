@@ -862,11 +862,12 @@ def spin_scan_auto(
                 cv2.imshow(win, disp)
                 key = cv2.waitKey(1) & 0xFF
                 if key in (ord(" "), 13) and detected:
-                    # White = median of the 9 detected sticker samples.
+                    # White = the brightest, most-neutral of the 9 samples. On a
+                    # scrambled white face only the center is guaranteed white,
+                    # so we must NOT median all 9 (that mixes random colors).
+                    from .detect import pick_white_reference
                     samples = [_sample_cell(frame, c, patch_half) for c in centers]
-                    white = tuple(
-                        sorted(s[i] for s in samples)[4] for i in range(3)
-                    )
+                    white = pick_white_reference(samples)
                     classifier = ColorClassifier.from_white_anchor(white)
                     collector = SpinCollector(
                         classifier=classifier, steady_frames=steady_frames
