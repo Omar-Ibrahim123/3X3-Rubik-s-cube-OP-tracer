@@ -116,8 +116,8 @@ def score_face_candidate_debug(
     aspect = max(rw, rh) / min(rw, rh)
     if aspect > 1.4:
         return 0.0, f"aspect {aspect:.2f} > 1.4 (not square)"
-    if extent < 0.68:
-        return 0.0, f"extent {extent:.2f} < 0.68 (poorly filled)"
+    if extent < 0.55:
+        return 0.0, f"extent {extent:.2f} < 0.55 (poorly filled)"
     if not (0.015 <= size_frac <= 0.95):
         return 0.0, f"size_frac {size_frac:.3f} out of [0.015, 0.95]"
     return score_face_candidate(rcx, rcy, rw, rh, extent, frame_w, frame_h), ""
@@ -149,7 +149,7 @@ def score_face_candidate(
     aspect = max(rw, rh) / min(rw, rh)
     if aspect > 1.4:
         return 0.0
-    if extent < 0.68:
+    if extent < 0.55:
         return 0.0
     if not (0.015 <= size_frac <= 0.95):  # ~12%..97% of a side length
         return 0.0

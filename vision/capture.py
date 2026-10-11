@@ -265,19 +265,28 @@ def _cube_edge_mask(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
     edges = cv2.Canny(gray, 50, 150)
-    # Dilate/close so the many small sticker-border edges fuse into one filled
-    # cube blob; kernel ~3% of the frame bridges the gaps between stickers.
-    k = max(5, int(round(min(h, w) * 0.03)) | 1)
+    # Dilate/close so the many small sticker-border edges fuse. The edge image
+    # of a cube is a LATTICE (sticker outlines), so a plain fill leaves holes
+    # and the blob's 'extent' stays low. Use a larger kernel to bridge the 3x3
+    # gaps into one mass.
+    k = max(7, int(round(min(h, w) * 0.05)) | 1)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
     mask = cv2.dilate(edges, kernel, iterations=1)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-    # Fill interior holes so the blob is solid (good extent/fill for scoring).
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    # Replace each sizable contour with its CONVEX HULL (filled). A lattice's
+    # hull is a solid square, so the cube becomes a solidly-filled blob with
+    # high extent -- which is what the face scorer needs.
     contours, _ = cv2.findContours(
         mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
-    if contours:
-        cv2.drawContours(mask, contours, -1, 255, thickness=cv2.FILLED)
-    return mask
+    out = np.zeros_like(mask)
+    frame_area = float(h * w)
+    for c in contours:
+        if cv2.contourArea(c) < frame_area * 0.01:
+            continue
+        hull = cv2.convexHull(c)
+        cv2.drawContours(out, [hull], -1, 255, thickness=cv2.FILLED)
+    return out
 
 
 def _sticker_mask(frame):
