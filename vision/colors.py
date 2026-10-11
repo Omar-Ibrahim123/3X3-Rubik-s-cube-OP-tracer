@@ -134,12 +134,16 @@ class ColorClassifier:
         missing = set(FACE_NAMES) - set(centers)
         if missing:
             raise ValueError(f"calibration missing faces: {sorted(missing)}")
+        from .calibration import MIN_PALETTE_DISTANCE
+
         classifier = cls(references=dict(centers), perceptual=True)
         first, second, distance = classifier.nearest_palette_pair()
-        if distance < 7.0:
+        if distance < MIN_PALETTE_DISTANCE:
             raise ValueError(
-                "calibration colors are not distinct enough: "
-                f"{first}/{second} distance={distance:.2f}; recalibrate"
+                f"calibration colors are not distinct enough: {first}/{second} "
+                f"only {distance:.1f} dE apart (need >= {MIN_PALETTE_DISTANCE:.0f}); "
+                f"re-show the {first} and {second} faces -- one was likely "
+                "sampled wrong (e.g. red captured as white during a turn)"
             )
         return classifier
 

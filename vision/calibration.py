@@ -16,6 +16,16 @@ from .colorsci import rgb_distance
 RGB = tuple[float, float, float]
 CALIBRATION_ORDER = ("U", "R", "F", "D", "L", "B")
 
+# Minimum CIEDE2000 distance any two calibrated centres must have. A real
+# six-colour cube has well-separated centres: healthy calibrations measured a
+# closest pair of ~22 dE. A broken calibration -- e.g. the red face sampled as
+# white because it was shown during a transition -- produced two near-identical
+# whites only ~9 dE apart, which then has NO red reference and misreads every
+# red sticker as orange. 15 dE sits safely between the two: it rejects the
+# duplicate-colour failure while clearing every genuine palette by a wide
+# margin. Shared by the live tracker and ColorClassifier.from_palette.
+MIN_PALETTE_DISTANCE = 15.0
+
 
 def median_rgb(samples: Sequence[RGB]) -> RGB:
     """Per-channel median of several stable center samples."""
@@ -39,7 +49,7 @@ class PaletteCalibrationTracker:
     order: tuple[str, ...] = CALIBRATION_ORDER
     stable_frames: int = 6
     stable_distance: float = 4.0
-    min_palette_distance: float = 7.0
+    min_palette_distance: float = MIN_PALETTE_DISTANCE
     transition_frames: int = 3
 
     palette: dict[str, RGB] = field(default_factory=dict)
