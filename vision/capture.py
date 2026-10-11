@@ -465,41 +465,44 @@ def _sample_cell(frame, center: Tuple[int, int], half: int) -> RGB:
 
 
 def _sample_center_sticker(frame, center, half, white_ref=None):
-    """Sample the CENTER sticker, using a printed logo as a WHITE signal.
+    """Sample a center sticker while excluding its logo-prone middle.
 
-    Many cubes (e.g. GAN) print a colored logo on the WHITE center sticker. We
-    use that as a positive signal: if the center patch has the 'bright-neutral
-    majority + saturated-minority logo' signature, this is the white face, so we
-    return white (the calibrated white_ref if given, else the patch's bright
-    majority). Otherwise we return the DOMINANT color (majority vote), which
-    ignores a small logo/glare on a colored center.
+    Center logos are normally printed in the middle of the sticker. Sampling a
+    square ring around that area recovers the underlying plastic color without
+    assigning semantic meaning to the logo. This same symmetric sampler is used
+    during calibration and scanning for every face.
+
+    `white_ref` is retained only for API compatibility; it is intentionally
+    ignored now that all six colors are explicitly calibrated.
     """
     _, np = _lazy_imports()
-    from .detect import dominant_color, has_logo_signature
+    from .detect import dominant_color
 
     fh, fw = frame.shape[:2]
     x, y = int(round(center[0])), int(round(center[1]))
-    half = max(2, int(round(half * 1.1)))
+    half = max(3, int(round(half * 1.05)))
     x0, x1 = max(0, x - half), min(fw, x + half)
     y0, y1 = max(0, y - half), min(fh, y + half)
     patch = frame[y0:y1, x0:x1]
     if patch.size == 0:
         return (0.0, 0.0, 0.0)
-    pix = patch.reshape(-1, 3)
-    if len(pix) > 600:
-        step = len(pix) // 600
-        pix = pix[::step]
+
+    # Remove the central 44% of the patch, where printed logos live. Keep the
+    # surrounding sticker ring, then use its dominant color to suppress glare.
+    ph, pw = patch.shape[:2]
+    yy, xx = np.ogrid[:ph, :pw]
+    inner_x = max(1, int(pw * 0.22))
+    inner_y = max(1, int(ph * 0.22))
+    ring_mask = (
+        (np.abs(xx - pw / 2.0) > inner_x)
+        | (np.abs(yy - ph / 2.0) > inner_y)
+    )
+    pix = patch[ring_mask]
+    if len(pix) == 0:
+        pix = patch.reshape(-1, 3)
+    if len(pix) > 800:
+        pix = pix[:: max(1, len(pix) // 800)]
     rgb_pixels = [(float(p[2]), float(p[1]), float(p[0])) for p in pix]
-    if has_logo_signature(rgb_pixels):
-        # Logo present -> this is the white face. Return white so it classifies
-        # as U regardless of the logo's color.
-        if white_ref is not None:
-            return tuple(white_ref)
-        # Fallback: average the bright-neutral (white) pixels of the patch.
-        whites = [p for p in rgb_pixels
-                  if sum(p) / 3.0 > 150 and (max(p) - min(p)) / (sum(p) / 3.0) < 0.18]
-        if whites:
-            return tuple(sum(p[c] for p in whites) / len(whites) for c in range(3))
     return dominant_color(rgb_pixels)
 
 
@@ -1020,7 +1023,11 @@ def _draw_detection(frame, centers, classifier=None, debug=False):
         x, y = int(x), int(y)
         cv2.circle(frame, (x, y), 10, (0, 255, 0), 2)
         if debug and classifier is not None:
-            sample = _sample_cell(frame, (x, y), 6)
+            sample = (
+                _sample_center_sticker(frame, (x, y), 6)
+                if i == 4
+                else _sample_cell(frame, (x, y), 6)
+            )
             face = classifier.classify(sample)
             cv2.putText(frame, _FACE_LABEL.get(face, face), (x - 16, y + 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3, cv2.LINE_AA)

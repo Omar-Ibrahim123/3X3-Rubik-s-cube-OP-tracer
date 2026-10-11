@@ -134,7 +134,29 @@ class ColorClassifier:
         missing = set(FACE_NAMES) - set(centers)
         if missing:
             raise ValueError(f"calibration missing faces: {sorted(missing)}")
-        return cls(references=dict(centers), perceptual=True)
+        classifier = cls(references=dict(centers), perceptual=True)
+        first, second, distance = classifier.nearest_palette_pair()
+        if distance < 7.0:
+            raise ValueError(
+                "calibration colors are not distinct enough: "
+                f"{first}/{second} distance={distance:.2f}; recalibrate"
+            )
+        return classifier
+
+    def nearest_palette_pair(self) -> Tuple[str, str, float]:
+        """Return the two closest learned references and their distance."""
+        faces = list(self.references)
+        if len(faces) < 2:
+            return ("", "", float("inf"))
+        closest = ("", "", float("inf"))
+        for index, first in enumerate(faces):
+            for second in faces[index + 1 :]:
+                distance = self.distance(
+                    self.references[first], self.references[second]
+                )
+                if distance < closest[2]:
+                    closest = (first, second, distance)
+        return closest
 
     @classmethod
     def from_centers(cls, centers: Dict[str, RGB]) -> "ColorClassifier":
@@ -161,6 +183,13 @@ class ColorClassifier:
     def _balance(self, sample: RGB) -> RGB:
         g = self.wb_gains
         return tuple(max(0.0, min(255.0, sample[i] * g[i])) for i in range(3))
+
+    def distance(self, a: RGB, b: RGB) -> float:
+        """Distance between two observed samples using this classifier's metric."""
+        if self.perceptual:
+            from .colorsci import rgb_distance
+            return rgb_distance(a, b)
+        return color_distance(self._balance(a), self._balance(b))
 
     def _dist(self, sample: RGB, ref: RGB) -> float:
         if self.perceptual:
