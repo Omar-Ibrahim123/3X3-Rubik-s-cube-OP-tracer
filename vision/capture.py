@@ -212,7 +212,7 @@ def analyze_dir(folder: str):
             # Diagnostic: show the top contours by area and why each was
             # rejected, so detection can be tuned against reality.
             print(f"  {name}: NOT detected")
-            mask = _sticker_mask(frame)
+            mask = _cube_edge_mask(frame)
             contours, _ = cv2.findContours(
                 mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
             )
@@ -243,9 +243,41 @@ def analyze_dir(folder: str):
                 cv2.circle(disp, (int(x), int(y)), 8, (0, 255, 0), 2)
         base, _ = os.path.splitext(path)
         cv2.imwrite(base + "_annotated.png", disp)
-        cv2.imwrite(base + "_mask.png", _sticker_mask(frame))
+        cv2.imwrite(base + "_mask.png", _cube_edge_mask(frame))
     print(f"\n{detected}/{len(paths)} frames detected. "
           f"Annotated + mask images written next to each frame.")
+
+
+def _cube_edge_mask(frame):
+    """Mask of the cube via EDGE DENSITY (robust to a bright background).
+
+    Key finding from real masks: the user scans in a bright room (white walls,
+    door, light skin), so brightness/saturation masking detects the BACKGROUND,
+    not the cube. What actually distinguishes the cube is DETAIL: it's packed
+    with edges (sticker borders + dark gaps), while walls/doors/skin are smooth.
+
+    So: Canny edges -> heavy dilate+close so the cube's dense edges merge into
+    one solid blob while sparse background edges stay small -> that blob is the
+    cube. Returns a binary mask where the cube region is white.
+    """
+    cv2, np = _lazy_imports()
+    h, w = frame.shape[:2]
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    edges = cv2.Canny(gray, 50, 150)
+    # Dilate/close so the many small sticker-border edges fuse into one filled
+    # cube blob; kernel ~3% of the frame bridges the gaps between stickers.
+    k = max(5, int(round(min(h, w) * 0.03)) | 1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    mask = cv2.dilate(edges, kernel, iterations=1)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    # Fill interior holes so the blob is solid (good extent/fill for scoring).
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    if contours:
+        cv2.drawContours(mask, contours, -1, 255, thickness=cv2.FILLED)
+    return mask
 
 
 def _sticker_mask(frame):
@@ -299,7 +331,7 @@ def _find_cube_face(frame, min_frac=0.02, max_frac=0.75):
     from .detect import score_face_candidate
 
     h, w = frame.shape[:2]
-    mask = _sticker_mask(frame)
+    mask = _cube_edge_mask(frame)
     contours, _ = cv2.findContours(
         mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
@@ -917,7 +949,7 @@ def spin_scan_auto(
             # In debug, show the detection mask + the found cube square, so we
             # can see what the detector is keying on.
             if debug:
-                cv2.imshow("detection mask", _sticker_mask(frame))
+                cv2.imshow("detection mask", _cube_edge_mask(frame))
                 if face is not None:
                     cv2.circle(disp, (int(face[0]), int(face[1])),
                                int(face[2] / 2), (255, 0, 255), 2)
