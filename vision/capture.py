@@ -275,7 +275,7 @@ def _cube_edge_mask(frame):
     # detectable). Hulling can over-grow to include nearby face/hair detail;
     # that is handled downstream by the EDGE-DENSITY check in _find_cube_face
     # (a real close cube is dense throughout; a cube+face+wall blob is sparse).
-    k = max(7, int(round(min(h, w) * 0.045)) | 1)
+    k = max(5, int(round(min(h, w) * 0.03)) | 1)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
     mask = cv2.dilate(edges, kernel, iterations=1)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
@@ -379,8 +379,53 @@ def _find_cube_face(frame, min_frac=0.02, max_frac=0.75):
             continue
         best_score = s
         size = (rw + rh) / 2.0
-        best = (rcx, rcy, size, math.radians(ang))
-    return best
+        best = (rcx, rcy, size, math.radians(ang), (x0, y0, x1, y1))
+    if best is None:
+        return None
+    # Refine the size: the hull/blob can over-grow past the cube (onto hand/
+    # hair), making the circle too big and the 3x3 grid too wide. Trim the box
+    # to where the raw edges are actually dense (the cube), using row/column
+    # edge-density profiles.
+    rcx, rcy, size, angle, (x0, y0, x1, y1) = best
+    rx0, ry0, rx1, ry1 = _refine_box_to_edges(edges, x0, y0, x1, y1)
+    rcx = (rx0 + rx1) / 2.0
+    rcy = (ry0 + ry1) / 2.0
+    size = ((rx1 - rx0) + (ry1 - ry0)) / 2.0
+    return (rcx, rcy, size, angle)
+
+
+def _refine_box_to_edges(edges, x0, y0, x1, y1, keep=0.90):
+    """Shrink a candidate box to the dense-edge core (the actual cube).
+
+    The blob can extend past the cube onto hand/hair where edges are sparse.
+    We build row and column edge-count profiles within the box and trim the
+    borders that fall below a fraction of the median profile value, keeping the
+    contiguous dense central band. This pulls the box in to hug the cube.
+    """
+    _, np = _lazy_imports()
+    sub = edges[y0:y1, x0:x1]
+    if sub.size == 0:
+        return x0, y0, x1, y1
+    col = (sub > 0).sum(axis=0).astype("float32")
+    row = (sub > 0).sum(axis=1).astype("float32")
+
+    def dense_span(profile):
+        if profile.max() <= 0:
+            return 0, len(profile)
+        thresh = max(1.0, float(np.median(profile[profile > 0])) * 0.25)
+        idx = np.where(profile >= thresh)[0]
+        if len(idx) == 0:
+            return 0, len(profile)
+        return int(idx[0]), int(idx[-1] + 1)
+
+    cx0, cx1 = dense_span(col)
+    ry0_, ry1_ = dense_span(row)
+    nx0, nx1 = x0 + cx0, x0 + cx1
+    ny0, ny1 = y0 + ry0_, y0 + ry1_
+    # Guard against degenerate trims.
+    if nx1 - nx0 < 10 or ny1 - ny0 < 10:
+        return x0, y0, x1, y1
+    return nx0, ny0, nx1, ny1
 
 
 def _detect_face_centers(frame):
