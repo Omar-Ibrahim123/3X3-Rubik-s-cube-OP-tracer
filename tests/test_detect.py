@@ -15,12 +15,61 @@ from vision.detect import (
     Square,
     detect_face_grid,
     filter_similar_squares,
+    find_cube_by_neighbors,
     is_sticker_blob,
+    is_sticker_square,
     pick_white_reference,
     score_face_candidate,
     subdivide_face,
     trimmed_median_color,
 )
+
+
+# --------------------------- Qbr-style detection ---------------------------
+
+def _grid_boxes(x0=200, y0=150, step=50, w=40):
+    """9 sticker boxes (x,y,w,h) in a clean 3x3 grid; gap = step - w."""
+    boxes = []
+    for row in range(3):
+        for col in range(3):
+            boxes.append((x0 + col * step, y0 + row * step, w, w))
+    return boxes
+
+
+def test_is_sticker_square_accepts_typical():
+    assert is_sticker_square(w=45, h=45, area=45 * 45 * 0.9)
+
+
+def test_is_sticker_square_rejects_non_square_and_sparse():
+    assert not is_sticker_square(w=45, h=20, area=600)       # not square
+    assert not is_sticker_square(w=45, h=45, area=45 * 45 * 0.3)  # too empty
+    assert not is_sticker_square(w=5, h=5, area=20)          # too small
+
+
+def test_find_cube_by_neighbors_clean_grid():
+    boxes = _grid_boxes()
+    face = find_cube_by_neighbors(boxes)
+    assert face is not None and len(face) == 9
+    # Reading order: first box is top-left, last is bottom-right.
+    assert face[0][0] < face[2][0]       # left < right in top row
+    assert face[0][1] < face[6][1]       # top < bottom
+
+
+def test_find_cube_by_neighbors_rejects_too_few():
+    assert find_cube_by_neighbors(_grid_boxes()[:8]) is None
+
+
+def test_find_cube_by_neighbors_ignores_scattered_noise():
+    # A clean 3x3 grid plus stray squares far away that don't form a grid.
+    boxes = _grid_boxes() + [(20, 20, 40, 40), (600, 440, 40, 40)]
+    face = find_cube_by_neighbors(boxes)
+    assert face is not None and len(face) == 9
+
+
+def test_find_cube_by_neighbors_no_grid():
+    # 9 squares in a horizontal line -> no 3x3 center with 9 neighbors.
+    line = [(50 + i * 60, 240, 40, 40) for i in range(9)]
+    assert find_cube_by_neighbors(line) is None
 
 
 # --------------------------- score_face_candidate ---------------------------

@@ -134,38 +134,24 @@ def analyze_frame(path: str):
     h, w = frame.shape[:2]
     print(f"image: {path}  ({w}x{h})")
 
-    mask = _sticker_mask(frame)
-    white_px = int((mask > 0).sum())
-    print(f"mask: {100.0 * white_px / (h * w):.1f}% of pixels are 'sticker-like'")
-
-    face = _find_cube_face(frame)
-    if face is None:
-        print("no cube face found")
-    else:
-        fcx, fcy, fsize, fang = face
-        import math
-        print(f"cube face: center=({fcx:.0f},{fcy:.0f}) size={fsize:.0f}px "
-              f"angle={math.degrees(fang):.1f}deg")
-
+    boxes = _find_sticker_boxes(frame)
+    print(f"candidate sticker squares: {len(boxes)}")
     centers = _detect_face_centers(frame)
-    print("FACE DETECTED (3x3 grid placed)" if centers else "no face detected")
+    print("FACE DETECTED (3x3 grid found)" if centers else "no face detected")
 
-    # Annotated image: cube square + the 9 subdivided cell centers.
+    # Annotated image: all candidate squares (magenta) + the detected 9 (green).
     disp = frame.copy()
-    if face is not None:
-        cv2.circle(disp, (int(face[0]), int(face[1])), int(face[2] / 2),
-                   (255, 0, 255), 2)
+    for (x, y, bw, bh) in boxes:
+        cv2.rectangle(disp, (x, y), (x + bw, y + bh), (255, 0, 255), 1)
     if centers:
         for (x, y) in centers:
             cv2.circle(disp, (int(x), int(y)), 10, (0, 255, 0), 3)
 
     base, _ = os.path.splitext(path)
-    mask_path = base + "_mask.png"
     annot_path = base + "_annotated.png"
-    cv2.imwrite(mask_path, mask)
     cv2.imwrite(annot_path, disp)
-    print(f"\nwrote:\n  {mask_path}\n  {annot_path}\nShare these two images.")
-    return mask_path, annot_path
+    print(f"\nwrote:\n  {annot_path}\nShare this image.")
+    return annot_path
 
 
 def analyze_dir(folder: str):
@@ -189,7 +175,6 @@ def analyze_dir(folder: str):
     if not paths:
         print(f"no .png frames found in {folder}")
         return
-    from .detect import score_face_candidate_debug
 
     detected = 0
     print(f"Analyzing {len(paths)} frame(s) in {folder}:\n")
@@ -198,59 +183,29 @@ def analyze_dir(folder: str):
         if frame is None:
             print(f"  {os.path.basename(path)}: could not read")
             continue
-        h, w = frame.shape[:2]
         name = os.path.basename(path)
-        face = _find_cube_face(frame)
+        boxes = _find_sticker_boxes(frame)
         centers = _detect_face_centers(frame)
 
-        if face is not None and centers is not None:
+        if centers is not None:
             detected += 1
-            fcx, fcy, fsize, _ = face
-            print(f"  {name}: DETECTED  size={fsize:.0f}px "
-                  f"({100.0 * fsize / w:.0f}% of width)")
+            print(f"  {name}: DETECTED  ({len(boxes)} sticker squares found)")
         else:
-            # Diagnostic: show the top contours by area and why each was
-            # rejected, so detection can be tuned against reality.
-            print(f"  {name}: NOT detected")
-            mask, edges = _cube_edge_mask(frame)
-            contours, _ = cv2.findContours(
-                mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-            )
-            cs = sorted(contours, key=cv2.contourArea, reverse=True)[:4]
-            if not cs:
-                print("      (no contours in mask at all)")
-            for c in cs:
-                a = cv2.contourArea(c)
-                (rcx, rcy), (rw, rh), _ = cv2.minAreaRect(c)
-                if rw <= 0 or rh <= 0:
-                    continue
-                extent = a / (rw * rh)
-                _, reason = score_face_candidate_debug(
-                    rcx, rcy, rw, rh, extent, float(w), float(h)
-                )
-                bx, by, bbw, bbh = cv2.boundingRect(c)
-                sub = edges[max(0, by):by + bbh, max(0, bx):bx + bbw]
-                dens = float((sub > 0).sum()) / sub.size if sub.size else 0.0
-                szpct = 100.0 * ((rw + rh) / 2.0) / w
-                if not reason and dens < 0.015:
-                    reason = f"edge-density {dens:.3f} < 0.015 (near-empty)"
-                print(f"      contour: size={szpct:.0f}%w "
-                      f"aspect={max(rw,rh)/min(rw,rh):.2f} extent={extent:.2f} "
-                      f"density={dens:.2f} center=({rcx:.0f},{rcy:.0f}) -> "
-                      f"{reason or 'ACCEPTED?'}")
+            # Diagnostic: how many sticker squares were found. Need >= 9 forming
+            # a 3x3 grid; if fewer, lighting/thresholds dropped stickers.
+            print(f"  {name}: NOT detected  "
+                  f"({len(boxes)} sticker squares found; need 9 in a 3x3 grid)")
 
         disp = frame.copy()
-        if face is not None:
-            cv2.circle(disp, (int(face[0]), int(face[1])), int(face[2] / 2),
-                       (255, 0, 255), 2)
+        for (x, y, bw, bh) in boxes:
+            cv2.rectangle(disp, (x, y), (x + bw, y + bh), (255, 0, 255), 1)
         if centers is not None:
             for (x, y) in centers:
                 cv2.circle(disp, (int(x), int(y)), 8, (0, 255, 0), 2)
         base, _ = os.path.splitext(path)
         cv2.imwrite(base + "_annotated.png", disp)
-        cv2.imwrite(base + "_mask.png", _cube_edge_mask(frame)[0])
     print(f"\n{detected}/{len(paths)} frames detected. "
-          f"Annotated + mask images written next to each frame.")
+          f"Annotated images written next to each frame.")
 
 
 def _cube_edge_mask(frame):
@@ -325,128 +280,52 @@ def _sticker_mask(frame):
     return mask
 
 
-def _find_cube_face(frame, min_frac=0.02, max_frac=0.75):
-    """Find the cube FACE as one big square, return (cx, cy, size, angle_rad).
+def _find_sticker_boxes(frame):
+    """Find candidate sticker squares via the Qbr preprocessing pipeline.
 
-    The robust approach: the mask renders the whole face as a single solid
-    square (the 9 stickers fused). Instead of fighting that to separate
-    stickers, we embrace it -- find the largest square-ish region (the cube) and
-    subdivide it into a 3x3 grid elsewhere. Returns None if no plausible face.
-
-    Picks the largest contour whose minimum-area rotated rect is roughly square
-    and sized like a close-held cube (a fraction of the frame). Returns the
-    rect's center, side length (mean of the two sides), and rotation in radians.
+    Adapted from Qbr (MIT, (c) 2016 Kim Koomen, https://github.com/kkoomen/qbr):
+    gray -> blur -> Canny(30,60) -> dilate with a 9x9 rect kernel, then take
+    4-sided, near-square, sticker-sized, well-filled contours. Returns a list of
+    (x, y, w, h) boxes.
     """
-    import math
-
     cv2, np = _lazy_imports()
-    from .detect import score_face_candidate
+    from .detect import is_sticker_square
 
-    h, w = frame.shape[:2]
-    mask, edges = _cube_edge_mask(frame)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.blur(gray, (3, 3))
+    canny = cv2.Canny(blurred, 30, 60, 3)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+    dilated = cv2.dilate(canny, kernel)
     contours, _ = cv2.findContours(
-        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE
     )
-    best = None
-    best_score = 0.0
+    boxes = []
     for c in contours:
-        a = cv2.contourArea(c)
-        rect = cv2.minAreaRect(c)  # ((cx,cy),(rw,rh),angle_deg)
-        (rcx, rcy), (rw, rh), ang = rect
-        if rw <= 0 or rh <= 0:
+        perimeter = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.1 * perimeter, True)
+        if len(approx) != 4:
             continue
-        extent = a / (rw * rh)
-        s = score_face_candidate(rcx, rcy, rw, rh, extent, float(w), float(h))
-        if s <= 0:
-            continue
-        # Validate by EDGE DENSITY inside the candidate box FIRST (before the
-        # best-score comparison), so a sparse false positive can't preempt a
-        # real but lower-scoring cube. A real close cube is uniformly packed
-        # with edges; a far 'cube+face+wall' blob is mostly empty.
-        x, y, bw, bh = cv2.boundingRect(c)
-        x0, y0 = max(0, x), max(0, y)
-        x1, y1 = min(w, x + bw), min(h, y + bh)
-        sub = edges[y0:y1, x0:x1]
-        if sub.size == 0:
-            continue
-        density = float((sub > 0).sum()) / sub.size
-        # Real cubes measured ~0.02-0.05 edge density on actual frames, so the
-        # gate is only a floor to drop near-empty regions; squareness + extent +
-        # centrality (the score) do the real cube-vs-not discrimination.
-        if density < 0.015:
-            continue
-        if s <= best_score:
-            continue
-        best_score = s
-        size = (rw + rh) / 2.0
-        best = (rcx, rcy, size, math.radians(ang), (x0, y0, x1, y1))
-    if best is None:
-        return None
-    # Refine the size: the hull/blob can over-grow past the cube (onto hand/
-    # hair), making the circle too big and the 3x3 grid too wide. Trim the box
-    # to where the raw edges are actually dense (the cube), using row/column
-    # edge-density profiles.
-    rcx, rcy, size, angle, (x0, y0, x1, y1) = best
-    rx0, ry0, rx1, ry1 = _refine_box_to_edges(edges, x0, y0, x1, y1)
-    rcx = (rx0 + rx1) / 2.0
-    rcy = (ry0 + ry1) / 2.0
-    size = ((rx1 - rx0) + (ry1 - ry0)) / 2.0
-    return (rcx, rcy, size, angle)
-
-
-def _refine_box_to_edges(edges, x0, y0, x1, y1, keep=0.90):
-    """Shrink a candidate box to the dense-edge core (the actual cube).
-
-    The blob can extend past the cube onto hand/hair where edges are sparse.
-    We build row and column edge-count profiles within the box and trim the
-    borders that fall below a fraction of the median profile value, keeping the
-    contiguous dense central band. This pulls the box in to hug the cube.
-    """
-    _, np = _lazy_imports()
-    sub = edges[y0:y1, x0:x1]
-    if sub.size == 0:
-        return x0, y0, x1, y1
-    col = (sub > 0).sum(axis=0).astype("float32")
-    row = (sub > 0).sum(axis=1).astype("float32")
-
-    def dense_span(profile):
-        if profile.max() <= 0:
-            return 0, len(profile)
-        thresh = max(1.0, float(np.median(profile[profile > 0])) * 0.25)
-        idx = np.where(profile >= thresh)[0]
-        if len(idx) == 0:
-            return 0, len(profile)
-        return int(idx[0]), int(idx[-1] + 1)
-
-    cx0, cx1 = dense_span(col)
-    ry0_, ry1_ = dense_span(row)
-    nx0, nx1 = x0 + cx0, x0 + cx1
-    ny0, ny1 = y0 + ry0_, y0 + ry1_
-    # Guard against degenerate trims.
-    if nx1 - nx0 < 10 or ny1 - ny0 < 10:
-        return x0, y0, x1, y1
-    return nx0, ny0, nx1, ny1
+        area = cv2.contourArea(c)
+        (x, y, w, h) = cv2.boundingRect(approx)
+        if is_sticker_square(w, h, area):
+            boxes.append((x, y, w, h))
+    return boxes
 
 
 def _detect_face_centers(frame):
-    """Return the 9 sticker-cell centers of the detected cube face, or None.
+    """Return the 9 sticker centers of the detected cube face, or None.
 
-    Finds the cube's outer square and subdivides it into a 3x3 grid. This is the
-    detection used by the scan flows. `angle` from minAreaRect is normalized to
-    a small tilt so a near-upright cube subdivides correctly.
+    Qbr-style: find sticker-sized squares, then find the one whose 3x3 neighbor
+    grid is fully populated (the center sticker); its 9 neighbors are the face.
+    Returns the 9 (x, y) sticker centers in reading order.
     """
-    import math
+    from .detect import find_cube_by_neighbors
 
-    face = _find_cube_face(frame)
+    boxes = _find_sticker_boxes(frame)
+    face = find_cube_by_neighbors(boxes)
     if face is None:
         return None
-    cx, cy, size, angle = face
-    # Normalize the rect angle to [-45, 45] deg: a square's orientation is
-    # ambiguous mod 90, and we only need the small tilt from upright.
-    deg = math.degrees(angle)
-    deg = ((deg + 45) % 90) - 45
-    from .detect import subdivide_face
-    return subdivide_face(cx, cy, size, math.radians(deg))
+    return [(x + w / 2.0, y + h / 2.0) for (x, y, w, h) in face]
 
 
 def _find_sticker_blobs(frame, min_frac=0.004, max_frac=0.09):
@@ -1013,20 +892,24 @@ def spin_scan_auto(
             if not ok:
                 raise RuntimeError("failed to read camera frame")
             disp = frame.copy()
-            face = _find_cube_face(frame)
             centers = _detect_face_centers(frame)
             detected = centers is not None
-            # Scale the sampling patch to the detected sticker (cell) size.
-            if face is not None:
-                patch_half = max(4, int((face[2] / 3.0) * 0.3))
+            # Scale the sampling patch to the spacing between detected stickers.
+            if detected:
+                import math as _m
+                dists = [
+                    _m.hypot(centers[i][0] - centers[j][0],
+                             centers[i][1] - centers[j][1])
+                    for i, j in ((0, 1), (1, 2), (3, 4), (4, 5))
+                ]
+                spacing = sorted(dists)[len(dists) // 2]
+                patch_half = max(4, int(spacing * 0.28))
 
-            # In debug, show the detection mask + the found cube square, so we
-            # can see what the detector is keying on.
+            # In debug, draw the detected sticker boxes so we can see detection.
             if debug:
-                cv2.imshow("detection mask", _cube_edge_mask(frame)[0])
-                if face is not None:
-                    cv2.circle(disp, (int(face[0]), int(face[1])),
-                               int(face[2] / 2), (255, 0, 255), 2)
+                for (bx, by, bw2, bh2) in _find_sticker_boxes(frame):
+                    cv2.rectangle(disp, (bx, by), (bx + bw2, by + bh2),
+                                  (255, 0, 255), 1)
 
             if classifier is None:
                 # ---- Phase A: white calibration via detection ----
