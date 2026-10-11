@@ -58,6 +58,50 @@ def _lazy_imports():
     return cv2, np
 
 
+def _find_sticker_squares(frame, min_frac=0.0015, max_frac=0.08):
+    """Detect candidate sticker squares in a frame -> list of detect.Square.
+
+    Thin OpenCV layer for automatic face detection: find square-ish contours of
+    plausible sticker size. The pure grid logic (vision/detect.py) decides which
+    9 form a face. Area thresholds are fractions of the frame area so they scale
+    with resolution.
+    """
+    cv2, np = _lazy_imports()
+    from .detect import Square
+
+    h, w = frame.shape[:2]
+    area = h * w
+    min_area, max_area = area * min_frac, area * max_frac
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    # Edges + dilate to close sticker borders, then find contours.
+    edges = cv2.Canny(gray, 40, 110)
+    edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=2)
+    contours, _ = cv2.findContours(
+        edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    squares = []
+    for c in contours:
+        a = cv2.contourArea(c)
+        if a < min_area or a > max_area:
+            continue
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.08 * peri, True)
+        if len(approx) != 4 or not cv2.isContourConvex(approx):
+            continue
+        x, y, bw, bh = cv2.boundingRect(approx)
+        if bh == 0:
+            continue
+        aspect = bw / float(bh)
+        if not (0.7 <= aspect <= 1.4):  # roughly square
+            continue
+        cx, cy = x + bw / 2.0, y + bh / 2.0
+        squares.append(Square(cx=cx, cy=cy, size=(bw + bh) / 2.0))
+    return squares
+
+
 def _grid_cell_centers(frame_w: int, frame_h: int, box: int) -> List[Tuple[int, int]]:
     """Return the 9 (x, y) pixel centers of a centered 3x3 grid.
 
@@ -462,6 +506,152 @@ def spin_scan_session(
                 box_scale = min(0.95, box_scale + 0.03)
             elif key in (ord("-"), ord("_")):
                 box_scale = max(0.25, box_scale - 0.03)
+            if key in (ord("q"), 27):
+                raise KeyboardInterrupt("scan aborted")
+            if collector.is_complete():
+                break
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+    return classifier, collector.faces()
+
+
+def _draw_detection(frame, centers, classifier=None, debug=False):
+    """Draw the 9 detected sticker centers (and classified colors in debug)."""
+    cv2, _ = _lazy_imports()
+    for i, (x, y) in enumerate(centers):
+        x, y = int(x), int(y)
+        cv2.circle(frame, (x, y), 10, (0, 255, 0), 2)
+        if debug and classifier is not None:
+            sample = _sample_cell(frame, (x, y), 6)
+            face = classifier.classify(sample)
+            cv2.putText(frame, _FACE_LABEL.get(face, face), (x - 16, y + 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(frame, _FACE_LABEL.get(face, face), (x - 16, y + 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1,
+                        cv2.LINE_AA)
+
+
+def spin_scan_auto(
+    camera_index: int = 0,
+    steady_frames: int = 6,
+    debug: bool = False,
+):
+    """Automatic face detection: no box to fit the cube into.
+
+    One window. Phase A: hold the WHITE face up until it's detected (9 squares
+    found), press SPACE to calibrate. Phase B: slowly rotate the cube; each face
+    is auto-detected and auto-captured by its center color when steady.
+
+    Detection finds the 9 sticker squares in the frame (vision/detect.py orders
+    them), so sampling always lands on the stickers -- removing the alignment
+    problem the fixed box had. Returns (classifier, {face: 9 samples}).
+    """
+    cv2, _ = _lazy_imports()
+    from .colors import ColorClassifier
+    from .detect import detect_face_grid
+    from .spin import FaceCandidate, SpinCollector
+
+    cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
+        raise RuntimeError(f"could not open camera index {camera_index}")
+
+    win = "cube scan (auto-detect)"
+    classifier = None
+    collector = None
+    just_got = None
+    just_got_ttl = 0
+    patch_half = 6
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                raise RuntimeError("failed to read camera frame")
+            disp = frame.copy()
+            squares = _find_sticker_squares(frame)
+            centers = detect_face_grid(squares)
+            detected = centers is not None
+            # Scale the sampling patch to the detected sticker size.
+            if detected and squares:
+                from .detect import filter_similar_squares, _median
+                sizes = [s.size for s in filter_similar_squares(squares)]
+                if sizes:
+                    patch_half = max(4, int(_median(sizes) * 0.25))
+
+            if classifier is None:
+                # ---- Phase A: white calibration via detection ----
+                msg = ("WHITE face detected - press SPACE" if detected
+                       else "Show the WHITE face to the camera...")
+                color = (0, 220, 0) if detected else (0, 200, 255)
+                cv2.putText(disp, msg, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
+                            color, 2, cv2.LINE_AA)
+                if detected:
+                    _draw_detection(disp, centers)
+                cv2.putText(disp, "q/ESC = quit", (20, disp.shape[0] - 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1,
+                            cv2.LINE_AA)
+                cv2.imshow(win, disp)
+                key = cv2.waitKey(1) & 0xFF
+                if key in (ord(" "), 13) and detected:
+                    # White = median of the 9 detected sticker samples.
+                    samples = [_sample_cell(frame, c, patch_half) for c in centers]
+                    white = tuple(
+                        sorted(s[i] for s in samples)[4] for i in range(3)
+                    )
+                    classifier = ColorClassifier.from_white_anchor(white)
+                    collector = SpinCollector(
+                        classifier=classifier, steady_frames=steady_frames
+                    )
+                    if debug:
+                        print(f"[debug] white sample RGB = "
+                              f"({white[0]:.0f}, {white[1]:.0f}, {white[2]:.0f})")
+                elif key in (ord("q"), 27):
+                    raise KeyboardInterrupt("scan aborted")
+                continue
+
+            # ---- Phase B: spin collection via detection ----
+            if detected:
+                samples = [_sample_cell(frame, c, patch_half) for c in centers]
+                got = collector.offer(FaceCandidate(samples=samples))
+                if got:
+                    just_got = got
+                    just_got_ttl = 20
+                    if debug:
+                        rgb = [f"({s[0]:.0f},{s[1]:.0f},{s[2]:.0f})"
+                               for s in samples]
+                        print(f"[debug] captured {got}: {rgb}")
+                _draw_detection(disp, centers, classifier, debug)
+
+            if just_got_ttl > 0:
+                just_got_ttl -= 1
+            else:
+                just_got = None
+
+            # Progress bar.
+            cv2.putText(disp, "Slowly rotate the cube through all 6 faces",
+                        (20, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255),
+                        2, cv2.LINE_AA)
+            got_set = set(collector.collected_faces())
+            x0 = 20
+            cv2.putText(disp, "Collected:", (x0, 70), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6, (200, 200, 200), 1, cv2.LINE_AA)
+            x0 += 105
+            for face in FACE_NAMES:
+                col = (0, 220, 0) if face in got_set else (90, 90, 90)
+                cv2.putText(disp, face, (x0, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                            col, 2, cv2.LINE_AA)
+                x0 += 26
+            if not detected:
+                cv2.putText(disp, "(no face detected - adjust angle/lighting)",
+                            (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                            (0, 170, 255), 1, cv2.LINE_AA)
+            if just_got:
+                cv2.putText(disp, f"captured {just_got}!",
+                            (20, disp.shape[0] - 50), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7, (0, 220, 0), 2, cv2.LINE_AA)
+
+            cv2.imshow(win, disp)
+            key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
                 raise KeyboardInterrupt("scan aborted")
             if collector.is_complete():

@@ -85,31 +85,40 @@ class StaticScanner(FaceletSource):
         return facelets
 
     def read_facelets(self) -> str:
-        """Default scan: low-friction spin-to-scan (calibrate -> spin -> confirm).
+        """Default scan: automatic face detection (no box) -> spin -> confirm.
 
-        Rotate the cube slowly through all six faces; faces are auto-detected
-        by center color. See read_facelets_manual() for the press-a-key backup.
+        Hold the white face up until detected, then rotate the cube slowly
+        through all six faces; each is auto-detected and captured. See the
+        other read_facelets_* methods for the box and manual fallbacks.
         """
-        return self._scan(spin=True)
+        return self._scan(mode="auto")
+
+    def read_facelets_box(self) -> str:
+        """Fallback: fixed 3x3 box you size to the cube with +/- keys."""
+        return self._scan(mode="box")
 
     def read_facelets_manual(self) -> str:
         """Backup scan: show each face and press a key (robust under bad light)."""
-        return self._scan(spin=False)
+        return self._scan(mode="manual")
 
-    def _scan(self, spin: bool) -> str:
+    def _scan(self, mode: str) -> str:
         from . import capture  # lazy: only import OpenCV when scanning
 
         attempts = 0
         while True:
-            if spin:
-                # One continuous window: show white, then spin -- no window
-                # switch. The classifier is built from the white sample inside
-                # the same session.
+            if mode == "auto":
+                # Automatic detection: find the 9 sticker squares each frame, so
+                # sampling always lands on stickers (no box to align).
+                self._classifier, faces = capture.spin_scan_auto(
+                    camera_index=self._camera_index, debug=self._debug
+                )
+            elif mode == "box":
+                # Fixed box the user sizes with +/- (previous default).
                 self._classifier, faces = capture.spin_scan_session(
                     camera_index=self._camera_index, debug=self._debug
                 )
             else:
-                # Manual backup: full six-center calibration (handles any scheme).
+                # Manual: full six-center calibration (handles any scheme).
                 centers = capture.calibrate_centers(self._camera_index)
                 self._classifier = ColorClassifier.from_centers(centers)
                 faces = capture.scan_faces(self._camera_index)

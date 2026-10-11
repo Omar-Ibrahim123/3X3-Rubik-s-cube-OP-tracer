@@ -60,12 +60,13 @@ def cmd_demo_tps() -> int:
     return 0
 
 
-def cmd_scan(camera_index: int, manual: bool, debug: bool) -> int:
+def cmd_scan(camera_index: int, manual: str, debug: bool) -> int:
     """Scan a physical cube with the webcam and print its OP trace.
 
-    Default (spin): one window -- show white, then slowly rotate the cube
-    through all six faces (auto-detected by center color) -> confirm -> trace.
-    Manual backup: calibrate -> show each face and press SPACE -> confirm.
+    Default (auto): the cube face is detected automatically -- hold white up,
+    then slowly rotate through all six faces; no box to align.
+    --scan-box: fixed 3x3 box you size with +/- (fallback).
+    --scan-manual: calibrate centers, show each face, press SPACE (bad light).
     With --debug, each sticker is labeled live with its classified color and
     per-face RGB samples are printed, to diagnose color issues.
     Requires OpenCV locally (pip install -r requirements-scan.txt).
@@ -74,8 +75,10 @@ def cmd_scan(camera_index: int, manual: bool, debug: bool) -> int:
 
     scanner = StaticScanner(camera_index=camera_index, debug=debug)
     try:
-        if manual:
+        if manual == "manual":
             facelets = scanner.read_facelets_manual()
+        elif manual == "box":
+            facelets = scanner.read_facelets_box()
         else:
             facelets = scanner.read_facelets()
     except ImportError as exc:
@@ -100,7 +103,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     g.add_argument(
         "--scan", action="store_true",
-        help="scan a cube by slowly spinning it through all 6 faces, then trace",
+        help="scan by auto-detecting the cube face while you spin it, then trace",
+    )
+    g.add_argument(
+        "--scan-box", action="store_true",
+        help="fallback scan using a fixed 3x3 box you size with +/-",
     )
     g.add_argument(
         "--scan-manual", action="store_true",
@@ -126,8 +133,9 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.demo_tps:
         return cmd_demo_tps()
-    if args.scan or args.scan_manual:
-        return cmd_scan(args.camera, manual=args.scan_manual, debug=args.debug)
+    if args.scan or args.scan_box or args.scan_manual:
+        mode = "manual" if args.scan_manual else "box" if args.scan_box else "auto"
+        return cmd_scan(args.camera, manual=mode, debug=args.debug)
     return cmd_trace(args.facelets)
 
 
