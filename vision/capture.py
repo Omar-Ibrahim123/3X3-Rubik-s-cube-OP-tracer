@@ -115,6 +115,63 @@ def save_frames(camera_index: int = 0, out_dir: str = "frames"):
     return saved
 
 
+def analyze_frame(path: str):
+    """Run detection on a SAVED image and dump diagnostics + debug images.
+
+    Offline tuning tool: no camera needed. Loads `path`, runs the exact mask +
+    blob + grid pipeline, prints what it found (counts, blob sizes, whether a
+    3x3 face was detected), and writes two images next to the input:
+      <name>_mask.png       -- the binary sticker mask
+      <name>_annotated.png  -- blobs boxed, detected grid circled
+    Share those two PNGs so detection can be tuned against real output.
+    """
+    import os
+
+    cv2, np = _lazy_imports()
+    from .detect import detect_face_grid, filter_similar_squares
+
+    frame = cv2.imread(path)
+    if frame is None:
+        raise RuntimeError(f"could not read image: {path}")
+    h, w = frame.shape[:2]
+    print(f"image: {path}  ({w}x{h})")
+
+    mask = _sticker_mask(frame)
+    white_px = int((mask > 0).sum())
+    print(f"mask: {100.0 * white_px / (h * w):.1f}% of pixels are 'sticker-like'")
+
+    squares = _find_sticker_blobs(frame)
+    print(f"candidate sticker blobs found: {len(squares)}")
+    for i, s in enumerate(squares):
+        print(f"  blob {i}: center=({s.cx:.0f},{s.cy:.0f}) size={s.size:.0f}px")
+    kept = filter_similar_squares(squares)
+    print(f"after size-similarity filter: {len(kept)}")
+
+    centers = detect_face_grid(squares)
+    print("FACE DETECTED (3x3 grid found)" if centers else "no 3x3 face detected")
+
+    # Annotated image.
+    disp = frame.copy()
+    for s in squares:
+        cv2.rectangle(
+            disp,
+            (int(s.cx - s.size / 2), int(s.cy - s.size / 2)),
+            (int(s.cx + s.size / 2), int(s.cy + s.size / 2)),
+            (255, 0, 255), 2,
+        )
+    if centers:
+        for (x, y) in centers:
+            cv2.circle(disp, (int(x), int(y)), 10, (0, 255, 0), 3)
+
+    base, _ = os.path.splitext(path)
+    mask_path = base + "_mask.png"
+    annot_path = base + "_annotated.png"
+    cv2.imwrite(mask_path, mask)
+    cv2.imwrite(annot_path, disp)
+    print(f"\nwrote:\n  {mask_path}\n  {annot_path}\nShare these two images.")
+    return mask_path, annot_path
+
+
 def _sticker_mask(frame):
     """Binary mask of sticker-like pixels (vivid OR bright), gaps removed.
 
