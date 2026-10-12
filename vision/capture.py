@@ -979,6 +979,106 @@ def _show_net_window(facelets: str) -> None:
     cv2.waitKey(1)
 
 
+# OpenCV window title for the final result panel.
+_TRACE_WIN = "OP solution"
+
+
+def render_trace_image(trace):
+    """Return a BGR numpy image of the OP trace panel (pure; no display).
+
+    Split out from show_trace_window so the layout can be rendered and checked
+    without a live display (headless tuning / tests save it to a PNG).
+    """
+    cv2, np = _lazy_imports()
+
+    corner_pairs = trace.corner_pairs()
+    edge_pairs = trace.edge_pairs()
+    corners_txt = "  ".join(corner_pairs) if corner_pairs else "(none)"
+    edges_txt = "  ".join(edge_pairs) if edge_pairs else "(none)"
+
+    # Palette (BGR). Dark card background with coloured accent bars.
+    bg = (28, 24, 20)
+    card = (46, 40, 34)
+    accent_c = (74, 213, 255)   # corners -> warm yellow
+    accent_e = (255, 198, 74)   # edges   -> blue
+    ink = (236, 234, 232)
+    sub = (150, 150, 160)
+
+    W, H = 760, 460
+    img = np.full((H, W, 3), bg, np.uint8)
+
+    def rounded_card(y0, y1, accent):
+        cv2.rectangle(img, (24, y0), (W - 24, y1), card, -1)
+        cv2.rectangle(img, (24, y0), (W - 24, y1), (70, 64, 58), 1)
+        # accent bar along the top edge of the card
+        cv2.rectangle(img, (24, y0), (W - 24, y0 + 6), accent, -1)
+
+    def put(text, org, scale, color, thick=2):
+        cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, color,
+                    thick, cv2.LINE_AA)
+
+    def fit_scale(text, max_w, base=1.3, thick=3, floor=0.5):
+        """Largest font scale <= base that keeps `text` within max_w pixels."""
+        scale = base
+        while scale > floor:
+            (tw, _), _ = cv2.getTextSize(
+                text, cv2.FONT_HERSHEY_SIMPLEX, scale, thick)
+            if tw <= max_w:
+                break
+            scale -= 0.05
+        return scale
+
+    # Trace text must stay inside the card: from x=44 to the card's right edge.
+    trace_max_w = (W - 24) - 44 - 20
+
+    # Title
+    put("Old Pochmann trace", (28, 46), 0.95, ink, 2)
+    put("corner buffer UBL (A)   edge buffer UR (B)   -   read each pair as one swap",
+        (28, 74), 0.45, sub, 1)
+
+    # Corners card
+    rounded_card(96, 212, accent_c)
+    put("CORNERS", (44, 128), 0.6, accent_c, 2)
+    put(f"{len(corner_pairs)} pairs", (W - 170, 128), 0.5, sub, 1)
+    put(corners_txt, (44, 184), fit_scale(corners_txt, trace_max_w), ink, 3)
+
+    # Edges card
+    rounded_card(236, 352, accent_e)
+    put("EDGES", (44, 268), 0.6, accent_e, 2)
+    put(f"{len(edge_pairs)} pairs", (W - 170, 268), 0.5, sub, 1)
+    put(edges_txt, (44, 324), fit_scale(edges_txt, trace_max_w), ink, 3)
+
+    # Parity banner
+    if trace.parity:
+        cv2.rectangle(img, (24, 372), (W - 24, 414), (40, 180, 240), -1)
+        put("PARITY - apply the parity algorithm once", (44, 400), 0.62,
+            (20, 20, 20), 2)
+
+    put("press any key in this window to close", (28, H - 16), 0.45, sub, 1)
+    return img
+
+
+def show_trace_window(trace) -> None:
+    """Pop a clean window showing the final OP trace: corners + edges split.
+
+    `trace` is a solver.OPTrace. Draws two labelled panels -- Corners (yellow)
+    and Edges (blue) -- with the memo letter-pairs large and legible, and a
+    parity banner when parity is present. Best-effort: any display failure is
+    swallowed by the caller so a headless run still prints the trace to the
+    terminal. The window stays up until a key is pressed in it (or the caller
+    tears windows down), so the solver can read the memo at leisure.
+    """
+    cv2, _ = _lazy_imports()
+    img = render_trace_image(trace)
+    cv2.imshow(_TRACE_WIN, img)
+    # Block here so the window stays readable; keep it responsive to the OS.
+    cv2.waitKey(0)
+    try:
+        cv2.destroyWindow(_TRACE_WIN)
+    except Exception:  # pragma: no cover - teardown is best-effort
+        pass
+
+
 # Short names for a compact on-screen color readout.
 _FACE_LABEL = {"U": "Wht", "D": "Yel", "F": "Grn", "B": "Blu", "R": "Red", "L": "Org"}
 

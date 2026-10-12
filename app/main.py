@@ -91,7 +91,26 @@ def cmd_scan(camera_index: int, manual: str, debug: bool) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     print(f"\nScanned facelets: {facelets}\n")
-    return cmd_trace(facelets)
+    rc = cmd_trace(facelets)
+    if rc == 0:
+        # Pop a clean result window with the corners/edges trace. Best-effort:
+        # a headless box or a display error must not fail the scan -- the trace
+        # has already been printed to the terminal above.
+        try:
+            state = CubeState.from_facelets(facelets)
+            from vision import capture
+
+            # Close the "detected cube" compare window so only the result shows.
+            try:
+                import cv2  # noqa: F401  (only to tear the net window down)
+
+                cv2.destroyWindow("detected cube")
+            except Exception:
+                pass
+            capture.show_trace_window(trace(state))
+        except Exception as exc:  # pragma: no cover - display is optional
+            print(f"(result window unavailable: {exc})", file=sys.stderr)
+    return rc
 
 
 def cmd_save_frame(camera_index: int) -> int:

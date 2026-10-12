@@ -49,6 +49,32 @@ corner = `A` (UBL), edge = `B` (UR). Buffers are named constants in
 Reference: [Speffz on the Speedsolving wiki](https://www.speedsolving.com/wiki/index.php/Speffz).
 *(Scheme described there; implementation here is original.)*
 
+## Quick start — scan your cube
+
+Everything runs locally; there is no website or server. You need **Python
+3.10+** and a **webcam**.
+
+```bash
+# 1. Get the code
+git clone https://github.com/Omar-Ibrahim123/3X3-Rubik-s-cube-OP-tracer.git
+cd 3X3-Rubik-s-cube-OP-tracer
+
+# 2. Install the scanning dependencies (OpenCV + numpy)
+pip install -r requirements-scan.txt
+
+# 3. Scan — calibrate, spin through all six faces, confirm, done
+python -m app.main --scan          # add --camera 1 if the wrong camera opens
+```
+
+When the scan finishes, a **result window** opens showing your Old Pochmann
+trace with **corners and edges in separate panels** (and a parity banner if
+parity applies). The trace is printed to the terminal too. Press any key in the
+window to close it.
+
+> Tip: hold the cube **close** so it fills the on-screen box, use even lighting,
+> and avoid glare. If auto-detection struggles, see the fallback scan modes
+> below.
+
 ## Usage
 
 Requires Python 3.10+. The core (trace + TPS) has **no dependencies**.
@@ -85,8 +111,12 @@ phases:
    colors. This learns your cube's **real** colors.
 2. **Spin** — without switching windows, slowly rotate the cube through all six
    faces; each is detected and captured once held steady.
-3. **Confirm** — it prints the detected cube; press **y** to accept (or **n** to
-   re-scan). Then it prints the OP trace.
+3. **Confirm** — it shows the detected cube as a coloured net; press **y** to
+   accept (or **n** to re-scan).
+4. **Result** — a clean **on-screen window** pops up with your Old Pochmann
+   trace, **corners and edges split** into separate panels, plus a parity
+   banner when parity is present. The same trace is also printed to the
+   terminal. Press any key in the window to close it.
 
 Colors are classified by **CIEDE2000** perceptual distance in CIE L\*a\*b\*
 against your calibrated palette — comparing your real colors to your real colors
