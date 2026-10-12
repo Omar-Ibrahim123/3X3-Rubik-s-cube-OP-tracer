@@ -7,6 +7,23 @@ Owns one OpenCV camera and one window for the entire workflow:
 from __future__ import annotations
 
 
+def _nearest_calibrated(center, palette):
+    """Nearest already-calibrated face to `center`, or (None, inf) if empty.
+
+    Returns (face_letter, dE). Used for the live calibration readout so the user
+    sees when the centre they're about to capture is actually a duplicate of a
+    face already recorded (the red-as-white / blue-as-wrong failure mode).
+    """
+    from .colorsci import rgb_distance
+
+    best = (None, float("inf"))
+    for face, ref in palette.items():
+        d = rgb_distance(center, ref)
+        if d < best[1]:
+            best = (face, d)
+    return best
+
+
 def calibrate_and_spin(camera_index=0, steady_frames=6, debug=False):
     """Run six-color calibration and spin scanning in one camera window.
 
@@ -40,6 +57,13 @@ def calibrate_and_spin(camera_index=0, steady_frames=6, debug=False):
     just_captured = None
     just_captured_ttl = 0
     patch_half = 6
+    # Key pressed on the PREVIOUS frame, consumed by the calibrate phase this
+    # frame (one-frame latency is imperceptible and lets us keep a single
+    # waitKey at the bottom of the loop). Calibration is SPACE-to-capture: the
+    # user presses SPACE when the requested face is clearly in view, so the
+    # program records exactly the intended centre instead of guessing when a
+    # face has "settled" -- the root cause of the mis-sampled red/blue centres.
+    pending_key = 255  # 255 == no key
 
     try:
         while True:
@@ -79,19 +103,26 @@ def calibrate_and_spin(camera_index=0, steady_frames=6, debug=False):
                     )
 
             if phase == "calibrate":
+                # Sample the centre every frame for the LIVE readout, but only
+                # RECORD it when the user presses SPACE (and a face is detected).
                 center = (
                     capture._sample_center_sticker(frame, centers[4], patch_half)
                     if detected
                     else None
                 )
-                accepted = tracker.offer(center)
+                space_pressed = pending_key in (ord(" "), 13)
+                accepted = None
+                if space_pressed:
+                    accepted = tracker.commit(center)
+                    if accepted is None and debug:
+                        print(f"[debug] SPACE ignored: {tracker.last_message}")
                 expected = tracker.expected_face
                 capture._draw_closer_guide(display, detected)
 
                 if tracker.waiting_for_transition:
-                    title = f"Turn to {labels[expected]}"
+                    title = f"Turn to {labels[expected]}, then press SPACE"
                 elif expected is not None:
-                    title = f"CALIBRATE: show {labels[expected]}"
+                    title = f"CALIBRATE: show {labels[expected]}, press SPACE"
                 else:
                     title = "Calibration complete"
                 cv2.putText(
@@ -104,16 +135,36 @@ def calibrate_and_spin(camera_index=0, steady_frames=6, debug=False):
                     2,
                     cv2.LINE_AA,
                 )
-                cv2.putText(
-                    display,
-                    tracker.last_message or "hold face steady inside target",
-                    (20, 70),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.55,
-                    (220, 220, 220),
-                    1,
-                    cv2.LINE_AA,
-                )
+                # Live readout: which already-calibrated colour the centre is
+                # nearest to (or 'new' if far from all), so a mis-aligned/wrong
+                # face is caught BEFORE it is recorded. Early on, with few
+                # colours calibrated, this just shows the raw swatch.
+                if detected and center is not None and expected is not None:
+                    guess, guess_dist = _nearest_calibrated(center, tracker.palette)
+                    swatch = (int(center[2]), int(center[1]), int(center[0]))
+                    cv2.rectangle(display, (display.shape[1] - 60, 24),
+                                  (display.shape[1] - 20, 64), swatch, -1)
+                    if guess is not None and guess_dist < tracker.min_palette_distance:
+                        readout = f"center matches already-calibrated {guess}!"
+                        colour = (0, 165, 255)  # warn: duplicate of another face
+                    else:
+                        readout = f"center ready for {labels[expected]} - press SPACE"
+                        colour = (0, 220, 0)
+                    cv2.putText(
+                        display, readout, (20, 70),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.58, colour, 2, cv2.LINE_AA,
+                    )
+                else:
+                    cv2.putText(
+                        display,
+                        tracker.last_message or "line up the cube, then press SPACE",
+                        (20, 70),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55,
+                        (220, 220, 220),
+                        1,
+                        cv2.LINE_AA,
+                    )
                 done = " ".join(tracker.palette.keys()) or "none"
                 cv2.putText(
                     display,
@@ -266,6 +317,9 @@ def calibrate_and_spin(camera_index=0, steady_frames=6, debug=False):
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
                 raise KeyboardInterrupt("scan aborted")
+            # Remember this frame's key for the calibrate phase to consume next
+            # frame (SPACE-to-capture). Reset once no longer calibrating.
+            pending_key = key if phase == "calibrate" else 255
     finally:
         cap.release()
         cv2.destroyAllWindows()
