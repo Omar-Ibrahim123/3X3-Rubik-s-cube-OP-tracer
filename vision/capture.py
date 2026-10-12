@@ -280,18 +280,56 @@ def _sticker_mask(frame):
     return mask
 
 
-def _find_sticker_boxes(frame):
+# Fraction of the frame's shorter side used by the on-screen guide box AND,
+# when detection is restricted to it, the region-of-interest. A touch larger
+# than the drawn 0.55 bracket so stickers right at the box edge still count.
+GUIDE_BOX_FRAC = 0.55
+ROI_FRAC = 0.62
+
+
+def _guide_roi(frame, frac):
+    """Return the centered square ROI (x, y, w, h) covering `frac` of the frame.
+
+    Shared by the guide-box overlay and the ROI-restricted detection so what
+    the user sees ("put the cube in the box") is exactly where we look.
+    """
+    h, w = frame.shape[:2]
+    side = int(min(h, w) * frac)
+    x0 = (w - side) // 2
+    y0 = (h - side) // 2
+    return (x0, y0, side, side)
+
+
+def _find_sticker_boxes(frame, roi=None):
     """Find candidate sticker squares via the Qbr preprocessing pipeline.
 
     Adapted from Qbr (MIT, (c) 2016 Kim Koomen, https://github.com/kkoomen/qbr):
     gray -> blur -> Canny(30,60) -> dilate with a 9x9 rect kernel, then take
     4-sided, near-square, sticker-sized, well-filled contours. Returns a list of
-    (x, y, w, h) boxes.
+    (x, y, w, h) boxes in FULL-FRAME coordinates.
+
+    If `roi` (x, y, w, h) is given, edge detection runs ONLY inside that region
+    (the on-screen guide box). This removes background clutter -- door frames,
+    posters, shelves -- that would otherwise be found as stray sticker squares,
+    making detection faster and far more robust under awkward lighting. Found
+    boxes are offset back to full-frame coordinates so every downstream consumer
+    (sampling, overlays) is unchanged.
     """
     cv2, np = _lazy_imports()
     from .detect import is_sticker_square
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    ox, oy = 0, 0
+    region = frame
+    if roi is not None:
+        rx, ry, rw, rh = roi
+        fh, fw = frame.shape[:2]
+        rx0, ry0 = max(0, rx), max(0, ry)
+        rx1, ry1 = min(fw, rx + rw), min(fh, ry + rh)
+        if rx1 > rx0 and ry1 > ry0:
+            region = frame[ry0:ry1, rx0:rx1]
+            ox, oy = rx0, ry0
+
+    gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
     blurred = cv2.blur(gray, (3, 3))
     canny = cv2.Canny(blurred, 30, 60, 3)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
@@ -308,20 +346,23 @@ def _find_sticker_boxes(frame):
         area = cv2.contourArea(c)
         (x, y, w, h) = cv2.boundingRect(approx)
         if is_sticker_square(w, h, area):
-            boxes.append((x, y, w, h))
+            # Offset back to full-frame coordinates.
+            boxes.append((x + ox, y + oy, w, h))
     return boxes
 
 
-def _detect_face_centers(frame):
+def _detect_face_centers(frame, roi=None):
     """Return the 9 sticker centers of the detected cube face, or None.
 
     Qbr-style: find sticker-sized squares, then find the one whose 3x3 neighbor
     grid is fully populated (the center sticker); its 9 neighbors are the face.
-    Returns the 9 (x, y) sticker centers in reading order.
+    Returns the 9 (x, y) sticker centers in reading order (full-frame coords).
+
+    `roi` restricts the search to the guide box (see _find_sticker_boxes).
     """
     from .detect import find_cube_by_neighbors
 
-    boxes = _find_sticker_boxes(frame)
+    boxes = _find_sticker_boxes(frame, roi=roi)
     face = find_cube_by_neighbors(boxes)
     if face is None:
         return None
@@ -1061,20 +1102,27 @@ def spin_scan_session(
 
 
 def _draw_closer_guide(frame, detected):
-    """Draw a centered target box showing how big the cube should appear.
+    """Draw the detection region box: keep the cube INSIDE this box.
 
-    Detection is reliable only when the cube is held CLOSE enough that its
-    stickers are big. This box is the 'aim for roughly this size' guide: fill it
-    with the cube face. Green once a face is detected, amber otherwise.
+    Detection now runs ONLY inside this region (see _find_sticker_boxes roi),
+    so this box is a hard boundary, not just a size hint -- anything outside it
+    is ignored, which rejects background clutter and is far more robust in bad
+    lighting. The box matches ROI_FRAC exactly. Green once a face is detected,
+    amber otherwise. A dimmed overlay outside the box reinforces "stay inside".
     """
-    cv2, _ = _lazy_imports()
-    h, w = frame.shape[:2]
-    side = int(min(h, w) * 0.55)
-    cx, cy = w // 2, h // 2
-    x0, y0 = cx - side // 2, cy - side // 2
-    x1, y1 = cx + side // 2, cy + side // 2
+    cv2, np = _lazy_imports()
+    rx, ry, side, _ = _guide_roi(frame, ROI_FRAC)
+    x0, y0, x1, y1 = rx, ry, rx + side, ry + side
     color = (0, 220, 0) if detected else (0, 200, 255)
-    # Draw as corner brackets so it reads as a target, not a sampling grid.
+
+    # Dim everything outside the ROI so the box reads as "look here only".
+    mask = np.zeros(frame.shape[:2], bool)
+    mask[y0:y1, x0:x1] = True
+    outside = ~mask
+    frame[outside] = (frame[outside] * 0.6).astype(frame.dtype)
+
+    # Solid rectangle outline for the boundary + corner brackets for emphasis.
+    cv2.rectangle(frame, (x0, y0), (x1, y1), color, 1)
     L = side // 5
     for (px, py, dx, dy) in [
         (x0, y0, 1, 1), (x1, y0, -1, 1), (x0, y1, 1, -1), (x1, y1, -1, -1),
