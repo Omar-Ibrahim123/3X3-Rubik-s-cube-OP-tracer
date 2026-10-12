@@ -133,32 +133,71 @@ def test_tps_requires_start():
 
 # --------------------------- Trace correctness ---------------------------
 
+# Corner slots whose Speffz companion ring is listed in the opposite rotational
+# sense (the D-F-L corner); its ring must be read reversed when swapped. This
+# mirrors solver.op._REVERSED_CORNER_SLOTS but is re-derived here so this trace
+# stays an INDEPENDENT re-implementation rather than importing the solver's.
+_REV = frozenset(speffz.CORNER_COMPANIONS["U"])  # {'U', 'L', 'G'}
+
+
+def _independent_shoot(at, buffer, target, home, companions):
+    """Apply one OP shot (buffer <-> target slot) to `at` in place.
+
+    Independent re-implementation of the swap simulation: pair the buffer slot
+    ring with the target slot ring (started at `target`) and exchange stickers,
+    reversing a reversed-chirality corner ring.
+    """
+    buf_ring = list(companions[buffer])
+    tsr = companions[home[target]]
+    i = tsr.index(target)
+    tgt_ring = list(tsr[i:] + tsr[:i])
+    if len(buf_ring) == 3:
+        if home[buffer] in _REV:
+            buf_ring = [buf_ring[0]] + buf_ring[1:][::-1]
+        if home[target] in _REV:
+            tgt_ring = [tgt_ring[0]] + tgt_ring[1:][::-1]
+    snap = dict(at)
+    for b, t in zip(buf_ring, tgt_ring):
+        at[b], at[t] = snap[t], snap[b]
+
+
 def _independent_trace(at, buffer, home, positions):
-    """Independent cycle-decomposition of the permutation (see _verify_trace)."""
-    targets, visited = [], set()
-    bpiece = home[buffer]
+    """Independent OP trace by simulating shots.
 
-    def follow(start, closing):
-        cur = start
-        guard = 0
-        while True:
-            guard += 1
-            assert guard < 100, "non-terminating follow"
-            occ = at[cur]
-            if home[occ] == closing:
-                return
-            targets.append(occ)
-            visited.add(home[occ])
-            cur = occ
-
-    visited.add(bpiece)
-    follow(buffer, bpiece)
-    for pos in sorted(positions):
-        if home[pos] in visited or at[pos] == pos:
-            continue
-        targets.append(pos)
-        visited.add(home[pos])
-        follow(pos, home[pos])
+    Repeatedly shoots the sticker sitting in the buffer slot (breaking into a
+    new cycle when the buffer is solved) until the whole orbit is solved. This
+    deliberately mirrors the corrected solver algorithm but is written here
+    from scratch, so a mismatch flags a regression in either implementation.
+    Simulating the swaps is what makes orientation (twists/flips) and buffer
+    threading come out right -- a plain piece-cycle decomposition does not.
+    """
+    if home is speffz.CORNER_HOME:
+        companions = speffz.CORNER_COMPANIONS
+    else:
+        companions = {
+            k: (k, speffz.EDGE_COMPANION[k]) for k in speffz.EDGE_COMPANION
+        }
+    work = dict(at)
+    targets = []
+    buffer_stickers = set(companions[home[buffer]])
+    allpos = sorted(positions)
+    guard = 0
+    while True:
+        guard += 1
+        assert guard < 200, "non-terminating independent trace"
+        occ = work[buffer]
+        if occ != buffer and occ not in buffer_stickers:
+            target = occ
+        else:
+            target = next(
+                (p for p in allpos
+                 if work[p] != p and work[p] not in buffer_stickers),
+                None,
+            )
+            if target is None:
+                break
+        targets.append(target)
+        _independent_shoot(work, buffer, target, home, companions)
     return targets
 
 
@@ -206,6 +245,37 @@ def test_every_out_of_place_piece_is_covered(scramble):
         for pos in positions:
             if home[pos] not in covered:
                 assert at[pos] == pos, f"uncovered unsolved piece at {pos}"
+
+
+@pytest.mark.parametrize("scramble", [
+    "U",
+    "R",                               # single face turn (OP parity on both orbits)
+    "R U R' U'",
+    "R2 U2 R2 U2 R2 U2",
+    "D L F2 U' R B2 L' D2 F R' U B",
+    "F2 L2 D' R2 F2 D L2 U2 B2 U R U L' B F' D2 R' F'",
+])
+def test_trace_actually_solves_the_cube(scramble):
+    """The missing invariant: executing the generated memo as OP shots must
+    leave the cube solved. Previously nothing checked this, so a trace that
+    mis-handled in-place flips/twists (and broken-in cycles) went unnoticed."""
+    from tests.cube_moves import apply_sequence as seq
+    st = CubeState.from_facelets(seq(scramble))
+    for at, buf, home, targets in [
+        (st.corner_at, speffz.CORNER_BUFFER, speffz.CORNER_HOME, trace_corners(st)),
+        (st.edge_at, speffz.EDGE_BUFFER, speffz.EDGE_HOME, trace_edges(st)),
+    ]:
+        companions = (
+            speffz.CORNER_COMPANIONS if home is speffz.CORNER_HOME
+            else {k: (k, speffz.EDGE_COMPANION[k]) for k in speffz.EDGE_COMPANION}
+        )
+        work = dict(at)
+        for t in targets:
+            _independent_shoot(work, buf, t, home, companions)
+        assert all(work[p] == p for p in work), (
+            f"trace did not solve {scramble}: "
+            f"{ {p: v for p, v in work.items() if p != v} }"
+        )
 
 
 def test_malformed_state_does_not_hang():
