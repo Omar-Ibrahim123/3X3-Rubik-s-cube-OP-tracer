@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Blindfolded Cube Solver — Old Pochmann Tracer</title>
+  <meta name="description" content="Learn the math behind blindfolded Rubik's cube solving, the Old Pochmann method, and generate an OP trace for your own cube." />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <div class="brand">
+        <span class="cube-mark" aria-hidden="true">
+          <span></span><span></span><span></span>
+          <span></span><span></span><span></span>
+          <span></span><span></span><span></span>
+        </span>
+        <div>
+          <h1>Blindfolded Cube Solver</h1>
+          <p class="tagline">The math, the Old Pochmann method, and a cube scanner</p>
+        </div>
+      </div>
+    </div>
+    <nav class="tabs wrap" role="tablist" aria-label="Sections">
+      <button class="tab" role="tab" id="tab-math" aria-controls="panel-math" aria-selected="true">The Math of BLD</button>
+      <button class="tab" role="tab" id="tab-op" aria-controls="panel-op" aria-selected="false">The OP Method</button>
+      <button class="tab" role="tab" id="tab-scan" aria-controls="panel-scan" aria-selected="false">Scan Your Cube</button>
+    </nav>
+  </header>
+
+  <main class="wrap">
+
+    <!-- ================= TAB 1: THE MATH ================= -->
+    <section class="panel" id="panel-math" role="tabpanel" aria-labelledby="tab-math">
+      <h2>The math behind blindfolded solving</h2>
+      <p class="lead">
+        Blindfolded (BLD) solving looks like magic, but underneath it is a small
+        amount of group theory you can hold in your head. The core idea: never
+        think about the cube as 54 stickers — think about it as a set of
+        <strong>pieces that need to travel back home</strong>, and solve them one
+        swap at a time.
+      </p>
+
+      <h3>Pieces, not stickers</h3>
+      <p>
+        A 3×3 cube has <strong>8 corner pieces</strong> (3 stickers each) and
+        <strong>12 edge pieces</strong> (2 stickers each). Centers never move
+        relative to each other, so they define each face's "true" color. A solved
+        cube is just every piece in its home slot, with the correct
+        <em>orientation</em> (facing the right way).
+      </p>
+
+      <!-- Image placeholder -->
+      <figure class="img-slot">
+        <div class="img-placeholder" data-hint="corners-vs-edges.jpg">
+          <span>📷 Image placeholder</span>
+          <small>Drop a photo here: a cube with corners and edges highlighted.
+            Replace this box in <code>index.html</code> with
+            <code>&lt;img src="images/corners-vs-edges.jpg"&gt;</code></small>
+        </div>
+        <figcaption>Corners (3 stickers) vs. edges (2 stickers).</figcaption>
+      </figure>
+
+      <h3>Permutation and orientation</h3>
+      <p>
+        Every scramble is a <strong>permutation</strong>: it tells you which slot
+        each piece ended up in. On top of that, each piece has an
+        <strong>orientation</strong> — a corner can be twisted into one of 3
+        positions, an edge flipped into one of 2. Solving means fixing
+        <em>both</em>: get each piece to its home slot <em>and</em> untwisted /
+        unflipped.
+      </p>
+
+      <h3 id="buffers">Buffers — the heart of BLD</h3>
+      <p>
+        You can't move one piece without disturbing others. BLD methods get around
+        this with a <strong>buffer</strong>: one chosen slot that acts as your
+        "hands." You repeatedly swap whatever is sitting in the buffer with the
+        slot where that piece actually belongs. The buffer piece shoots out to its
+        home, and a new piece lands in the buffer — ready to be shot next.
+      </p>
+      <div class="callout">
+        <strong>Think of the buffer as a loading dock.</strong> A box arrives at the
+        dock (the buffer). You read its address and send it there. Sending it away
+        pulls the <em>next</em> box into the dock. Repeat until the dock is empty —
+        the cube is solved.
+      </div>
+      <p>
+        This project uses the two standard Old Pochmann buffers:
+      </p>
+      <ul class="buffer-list">
+        <li><strong>Corner buffer:</strong> the <code>UBL</code> corner (Speffz letter <code>A</code>).</li>
+        <li><strong>Edge buffer:</strong> the <code>UR</code> edge (Speffz letter <code>B</code>).</li>
+      </ul>
+
+      <figure class="img-slot">
+        <div class="img-placeholder" data-hint="buffer-slots.jpg">
+          <span>📷 Image placeholder</span>
+          <small>Drop a photo here: the cube with the corner buffer (UBL) and edge
+            buffer (UR) circled.</small>
+        </div>
+        <figcaption>The two buffer slots used by Old Pochmann.</figcaption>
+      </figure>
+
+      <h3>Cycles — why solving is a chain</h3>
+      <p>
+        Follow a buffer piece to its home, see what was living there, send
+        <em>that</em> home, and so on. You trace a <strong>cycle</strong>: a chain
+        of pieces that all shift along by one. When the chain loops back to the
+        buffer, that cycle is done. Any pieces still out of place form a new cycle —
+        you "break in" to it and keep going.
+      </p>
+
+      <h3>Orientation = two targets</h3>
+      <p>
+        A piece can arrive home but still be twisted or flipped. In OP that is not a
+        special case — it just costs <strong>two targets</strong>: you shoot one of
+        its stickers, then the other, which rotates it into place. (This is exactly
+        why an in-place flipped edge or twisted corner shows up as a pair of letters
+        in the trace, not one.)
+      </p>
+
+      <h3>Parity</h3>
+      <p>
+        Because corners and edges are solved separately, you can end up with a
+        single leftover swap that can't be resolved within edges alone — this is
+        <strong>parity</strong>. When it happens, one fix-up algorithm reconciles the
+        two groups. The tracer flags it for you with <code>[PARITY]</code>.
+      </p>
+
+      <h3>Lettering: turning the cube into words</h3>
+      <p>
+        To memorize a solution you convert slots into letters. This project uses the
+        community-standard <strong>Speffz</strong> scheme: letters A–X assigned to
+        corner stickers and, separately, to edge stickers. A solution becomes a
+        short string of letter-pairs you can memorize like words — e.g.
+        <code>OP JG IT</code>.
+      </p>
+      <figure class="img-slot">
+        <div class="img-placeholder" data-hint="speffz-lettering.jpg">
+          <span>📷 Image placeholder</span>
+          <small>Drop a photo here: a Speffz lettering diagram (A–X on each face).</small>
+        </div>
+        <figcaption>Speffz lettering — the alphabet of blindfolded solving.</figcaption>
+      </figure>
+    </section>
+
+    <!-- ================= TAB 2: THE OP METHOD ================= -->
+    <section class="panel" id="panel-op" role="tabpanel" aria-labelledby="tab-op" hidden>
+      <h2>The Old Pochmann (OP) method</h2>
+      <p class="lead">
+        Old Pochmann is the classic "first blindfolded method." It solves the whole
+        cube using just <strong>two algorithms</strong> plus setup moves — one swap
+        at a time, corners and edges handled separately. It's slower than advanced
+        methods, but it's the clearest way to understand how BLD works.
+      </p>
+
+      <h3>The big picture</h3>
+      <ol class="steps">
+        <li><strong>Edges first.</strong> Using the edge buffer, swap each edge home one at a time with the T-perm swap.</li>
+        <li><strong>Then corners.</strong> Using the corner buffer, swap each corner home one at a time with the Y-perm swap.</li>
+        <li><strong>Setup &amp; undo.</strong> Before each swap you do a few "setup moves" to bring the target into the swap position, then undo them after.</li>
+        <li><strong>Parity, if needed.</strong> If edges come out odd, apply the parity fix once.</li>
+      </ol>
+
+      <h3>The two workhorse algorithms</h3>
+      <div class="alg-grid">
+        <div class="alg-card">
+          <h4>Edges — T perm</h4>
+          <code class="alg">R U R' U' R' F R2 U' R' U' R U R' F'</code>
+          <p>Swaps the buffer edge with the edge in the swap slot, without wrecking the rest.</p>
+        </div>
+        <div class="alg-card">
+          <h4>Corners — Y perm</h4>
+          <code class="alg">F R U' R' U' R U R' F' R U R' U' R' F R F'</code>
+          <p>The corner equivalent: swaps the buffer corner with the swap slot.</p>
+        </div>
+      </div>
+
+      <h3>Watch it in action</h3>
+      <p>Add your tutorial videos here. Paste a YouTube link into each slot.</p>
+
+      <!-- Video placeholders: paste a YouTube/Vimeo embed URL into the data-src and src -->
+      <div class="video-grid">
+        <figure class="video-slot">
+          <div class="video-placeholder" data-label="Intro to OP">
+            <span>🎬 Video placeholder</span>
+            <small>Paste your video link in <code>index.html</code>:
+              replace this box with an <code>&lt;iframe src="YOUR_LINK"&gt;</code>,
+              or set the link in <code>app.js → VIDEO_LINKS.opIntro</code>.</small>
+          </div>
+          <figcaption>Introduction to Old Pochmann</figcaption>
+        </figure>
+        <figure class="video-slot">
+          <div class="video-placeholder" data-label="Edges (T perm)">
+            <span>🎬 Video placeholder</span>
+            <small>Set the link in <code>app.js → VIDEO_LINKS.opEdges</code>.</small>
+          </div>
+          <figcaption>Solving edges with the T perm</figcaption>
+        </figure>
+        <figure class="video-slot">
+          <div class="video-placeholder" data-label="Corners (Y perm)">
+            <span>🎬 Video placeholder</span>
+            <small>Set the link in <code>app.js → VIDEO_LINKS.opCorners</code>.</small>
+          </div>
+          <figcaption>Solving corners with the Y perm</figcaption>
+        </figure>
+        <figure class="video-slot">
+          <div class="video-placeholder" data-label="Parity">
+            <span>🎬 Video placeholder</span>
+            <small>Set the link in <code>app.js → VIDEO_LINKS.opParity</code>.</small>
+          </div>
+          <figcaption>Handling parity</figcaption>
+        </figure>
+      </div>
+
+      <h3>Memorizing the solution</h3>
+      <p>
+        The scanner on the next tab gives you the trace as letter-pairs. Most people
+        turn each pair into a word or image and string them into a short story —
+        that's how a scramble becomes something you can hold in memory behind a
+        blindfold.
+      </p>
+    </section>
+
+    <!-- ================= TAB 3: SCAN YOUR CUBE ================= -->
+    <section class="panel" id="panel-scan" role="tabpanel" aria-labelledby="tab-scan" hidden>
+      <h2>Scan your cube &amp; get the trace</h2>
+      <p class="lead">
+        Run the detection program, confirm the cube it read is really yours, then
+        get your Old Pochmann solution — corners and edges split out separately.
+      </p>
+
+      <!-- STEP 1: RUN -->
+      <div class="scan-step" id="scan-step-run">
+        <div class="step-head"><span class="step-num">1</span><h3>Run the scanner</h3></div>
+        <p class="muted">
+          The vision scanner reads your cube with your webcam and produces a 54-sticker
+          facelet string. In-browser scanning isn't wired up yet (see the note below),
+          so this button loads a <strong>sample scan</strong> so you can walk through the
+          full flow.
+        </p>
+        <button class="btn primary" id="btn-run-scan">Run scanner</button>
+
+        <details class="howto">
+          <summary>How to run the real scanner today (on your own machine)</summary>
+          <ol>
+            <li>Clone the repo and install the scan dependencies:
+              <pre><code>pip install -r requirements-scan.txt</code></pre>
+            </li>
+            <li>Run a live scan with your webcam:
+              <pre><code>python -m app.main --scan</code></pre>
+            </li>
+            <li>Calibrate (show each center), spin through all six faces, confirm, and it
+              prints the corner and edge trace.</li>
+          </ol>
+        </details>
+      </div>
+
+      <!-- STEP 2: CONFIRM -->
+      <div class="scan-step is-disabled" id="scan-step-confirm">
+        <div class="step-head"><span class="step-num">2</span><h3>Confirm it's your cube</h3></div>
+        <p class="muted">Here's what the scanner read. Does this match your actual cube?</p>
+        <div class="net-wrap">
+          <div class="cube-net" id="cube-net" aria-label="Detected cube layout"></div>
+        </div>
+        <p class="facelet-string">Facelet string: <code id="facelet-out">—</code></p>
+        <div class="confirm-actions">
+          <button class="btn primary" id="btn-confirm-yes" disabled>Yes, that's my cube</button>
+          <button class="btn ghost" id="btn-confirm-no" disabled>No, re-scan</button>
+        </div>
+      </div>
+
+      <!-- STEP 3: SOLUTION -->
+      <div class="scan-step is-disabled" id="scan-step-solution">
+        <div class="step-head"><span class="step-num">3</span><h3>Your Old Pochmann trace</h3></div>
+        <div class="trace-grid">
+          <div class="trace-card corners">
+            <h4>Corners</h4>
+            <p class="trace-letters" id="trace-corners">—</p>
+          </div>
+          <div class="trace-card edges">
+            <h4>Edges</h4>
+            <p class="trace-letters" id="trace-edges">—</p>
+            <p class="parity-flag" id="parity-flag" hidden>Parity — apply the parity fix once.</p>
+          </div>
+        </div>
+        <p class="muted small">
+          Letters are Speffz. Corner buffer = UBL (A), edge buffer = UR (B).
+          Read each pair as one swap.
+        </p>
+      </div>
+
+      <!-- Honest note about in-browser scanning + the seam for the future -->
+      <div class="callout note">
+        <strong>About in-browser scanning.</strong> The detection program is a Python +
+        OpenCV desktop app that uses your local webcam, so it can't run directly inside a
+        web page yet. This tab is built around a single <code>scanCube()</code> function in
+        <code>app.js</code> — today it returns sample data. When live scanning is added
+        (either uploading photos to a backend, or a browser-native scanner), only that one
+        function changes; everything you see here stays the same.
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>
+        Old Pochmann blindfolded tracer · Speffz lettering ·
+        <a href="https://github.com/Omar-Ibrahim123/3X3-Rubik-s-cube-OP-tracer" target="_blank" rel="noopener">source on GitHub</a>
+      </p>
+      <p class="credits small">
+        Cube-face detection adapted from <a href="https://github.com/kkoomen/qbr" target="_blank" rel="noopener">Qbr</a> (MIT, © Kim Koomen).
+      </p>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
