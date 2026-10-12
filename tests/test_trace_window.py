@@ -61,6 +61,14 @@ def _install_stubs(monkeypatch):
         (int(len(text) * _PX_PER_CHAR * scale), int(26 * scale)),
         6,
     )
+    # Display + input stubs for the in-window confirm flow. `waitKey` returns a
+    # steady key value the test sets via calls["key"], so the confirm loop
+    # terminates deterministically instead of blocking.
+    calls["key"] = 255
+    calls["destroyed"] = []
+    cv2.imshow = lambda *a, **k: None
+    cv2.destroyWindow = lambda name: calls["destroyed"].append(name)
+    cv2.waitKey = lambda delay=0: calls["key"]
 
     monkeypatch.setitem(sys.modules, "numpy", np)
     monkeypatch.setitem(sys.modules, "cv2", cv2)
@@ -141,3 +149,63 @@ def test_long_memo_autofits_card(monkeypatch):
         assert width <= trace_max_w, (
             f"memo overflows card: {text!r} width~{int(width)} > {trace_max_w}"
         )
+
+
+# --------------------------------------------------------------------------
+# In-window confirmation: the terminal must stay silent and the accept /
+# re-scan decision must come from a keypress in the net window, not input().
+# --------------------------------------------------------------------------
+
+_FACELETS = "DUFBUUDRFRFRRRBBDDRBDDFULRUUFRDDFBLFBLBDLBLLFULLUBRLFU"
+
+
+class _Report:
+    def __init__(self, solvable=True, parity=False):
+        self.solvable = solvable
+        self.parity = parity
+        self.low_confidence = []
+
+
+@pytest.mark.parametrize(
+    "key, expected",
+    [
+        (ord("y"), True),   # accept
+        (ord("Y"), True),
+        (13, True),         # Enter
+        (ord("n"), False),  # re-scan
+        (ord("N"), False),
+        (ord("q"), False),  # quit -> re-scan
+        (27, False),        # Esc -> re-scan
+    ],
+)
+def test_confirm_decision_comes_from_window_key(monkeypatch, capsys, key, expected):
+    capture, calls = _install_stubs(monkeypatch)
+    calls["key"] = key
+    result = capture.confirm_facelets(_FACELETS, None, _Report())
+    assert result is expected
+    # The terminal must be completely silent -- nothing printed either way.
+    out = capsys.readouterr()
+    assert out.out == "" and out.err == ""
+
+
+def test_confirm_accept_closes_net_window(monkeypatch):
+    capture, calls = _install_stubs(monkeypatch)
+    calls["key"] = ord("y")
+    capture.confirm_facelets(_FACELETS, None, _Report())
+    assert "detected cube" in calls["destroyed"]
+
+
+def test_confirm_falls_back_to_accept_without_display(monkeypatch, capsys):
+    capture, calls = _install_stubs(monkeypatch)
+
+    # Simulate no display: imshow raises (as a headless OpenCV would).
+    def _no_display(*a, **k):
+        raise RuntimeError("cannot open display")
+
+    import cv2  # the stub installed above
+    cv2.imshow = _no_display
+
+    result = capture.confirm_facelets(_FACELETS, None, _Report())
+    assert result is True  # headless can't confirm visually -> accept
+    out = capsys.readouterr()
+    assert out.out == "" and out.err == ""

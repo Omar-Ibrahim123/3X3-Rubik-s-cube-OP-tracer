@@ -66,10 +66,14 @@ pip install -r requirements-scan.txt
 python -m app.main --scan          # add --camera 1 if the wrong camera opens
 ```
 
-When the scan finishes, a **result window** opens showing your Old Pochmann
-trace with **corners and edges in separate panels** (and a parity banner if
-parity applies). The trace is printed to the terminal too. Press any key in the
-window to close it.
+Everything happens **in the on-screen windows** — the terminal stays clean
+(the only thing in your shell is the command you ran):
+
+- When a face is read, the detected cube is shown as a coloured net. Press
+  **Y** in that window to accept, or **N** to re-scan (Q/Esc also re-scans).
+- After you accept, a **result window** opens with your Old Pochmann trace,
+  **corners and edges in separate panels** (plus a parity banner if parity
+  applies). Press any key in that window to close it.
 
 > Tip: hold the cube **close** so it fills the on-screen box, use even lighting,
 > and avoid glare. If auto-detection struggles, see the fallback scan modes
@@ -111,12 +115,13 @@ phases:
    colors. This learns your cube's **real** colors.
 2. **Spin** — without switching windows, slowly rotate the cube through all six
    faces; each is detected and captured once held steady.
-3. **Confirm** — it shows the detected cube as a coloured net; press **y** to
-   accept (or **n** to re-scan).
-4. **Result** — a clean **on-screen window** pops up with your Old Pochmann
+3. **Confirm (in the window)** — it shows the detected cube as a coloured net
+   with a status line; press **Y** in the window to accept, or **N** to re-scan
+   (Q/Esc also re-scan). Nothing is typed in the terminal.
+4. **Result (in the window)** — a clean window pops up with your Old Pochmann
    trace, **corners and edges split** into separate panels, plus a parity
-   banner when parity is present. The same trace is also printed to the
-   terminal. Press any key in the window to close it.
+   banner when parity is present. Press any key in the window to close it. The
+   terminal stays clean throughout.
 
 Colors are classified by **CIEDE2000** perceptual distance in CIE L\*a\*b\*
 against your calibrated palette — comparing your real colors to your real colors

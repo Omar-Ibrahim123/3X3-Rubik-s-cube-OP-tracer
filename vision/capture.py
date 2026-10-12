@@ -893,51 +893,53 @@ def spin_scan(
 
 
 def confirm_facelets(facelets: str, classifier=None, report=None) -> bool:
-    """Show the detected cube as a COLOURED NET and ask for a one-key confirm.
+    """Show the detected cube in a window and confirm with an in-window keypress.
 
-    `report` (optional) is a vision.confirm.ScanReport adding a solvability /
-    parity line and low-confidence sticker warnings, so the user can tell a
-    correct read from a plausible-but-wrong one. Falls back to a plain net when
-    no report is given. A coloured net image is also shown in an OpenCV window
-    (best-effort) so the detected cube can be compared to the physical one.
+    The confirmation happens entirely in the OpenCV window: the detected cube is
+    drawn as a coloured net with an on-screen prompt, and the user presses
+    **Y** to accept or **N** to re-scan *in that window* (Q/Esc also re-scans).
+    Nothing is printed to the terminal, so the only thing in the shell is the
+    command the user ran.
 
-    Returns True to accept, False to re-scan.
+    `report` (optional) is a vision.confirm.ScanReport; its parity / "not a
+    solvable cube" status is drawn onto the net image rather than printed.
+
+    Returns True to accept, False to re-scan. If no display is available this
+    falls back to accepting the scan (headless runs can't confirm visually).
     """
-    from .confirm import net_lines
+    cv2, _ = _lazy_imports()
 
-    print("\nDetected cube (compare this net to the cube in your hand):")
-    for line in net_lines(facelets, color=True):
-        print("  " + line)
-    print(f"\n  facelet string: {facelets}")
-
+    status = None
     if report is not None:
-        print()
-        for line in report.summary_lines():
-            print("  " + line)
         if not report.solvable:
-            print("  WARNING: this is not a solvable cube -- a sticker is misread.")
+            status = ("NOT a solvable cube - a sticker was misread", False)
+        else:
+            status = ("looks valid" + ("  (parity)" if report.parity else ""), True)
 
-    # Best-effort: also pop up a coloured net image for easier comparison.
     try:
-        _show_net_window(facelets)
-    except Exception:  # pragma: no cover - display is optional
-        pass
+        _show_net_window(facelets, status=status)
+    except Exception:  # pragma: no cover - no display: can't confirm visually
+        return True
 
+    # Read the accept/re-scan decision from keys pressed IN the window.
     while True:
-        resp = input("\nAccept this scan? [y]es / [n]o re-scan: ").strip().lower()
-        if resp in ("y", "yes", ""):
+        key = cv2.waitKey(50) & 0xFF
+        if key in (ord("y"), ord("Y"), 13):          # Y / Enter -> accept
             try:
-                cv2, _ = _lazy_imports()
                 cv2.destroyWindow("detected cube")
             except Exception:  # pragma: no cover
                 pass
             return True
-        if resp in ("n", "no"):
+        if key in (ord("n"), ord("N"), ord("q"), 27):  # N / Q / Esc -> re-scan
             return False
 
 
-def _show_net_window(facelets: str) -> None:
-    """Draw the detected cube as a coloured cross-net in an OpenCV window."""
+def _show_net_window(facelets: str, status=None) -> None:
+    """Draw the detected cube as a coloured cross-net in an OpenCV window.
+
+    `status` is an optional (text, ok) tuple drawn as a coloured status line
+    (green when ok, red when not) so solvability/parity is visible on screen.
+    """
     cv2, np = _lazy_imports()
 
     # BGR colours for each face letter (matches a standard scheme).
@@ -972,7 +974,15 @@ def _show_net_window(facelets: str) -> None:
 
     for letter, (gx, gy) in pos.items():
         draw_face(letter, gx, gy)
-    cv2.putText(img, "Compare to your cube. Terminal: y accept / n re-scan",
+
+    # Optional status line (solvable / parity), coloured green or red.
+    if status is not None:
+        text, ok = status
+        colour = (90, 210, 90) if ok else (60, 60, 230)  # BGR green / red
+        cv2.putText(img, text, (10, h - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                    colour, 1, cv2.LINE_AA)
+
+    cv2.putText(img, "Compare to your cube.   Y = accept    N = re-scan",
                 (10, h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1,
                 cv2.LINE_AA)
     cv2.imshow("detected cube", img)
