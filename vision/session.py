@@ -64,6 +64,14 @@ def calibrate_and_spin(camera_index=0, steady_frames=6, debug=False):
     # program records exactly the intended centre instead of guessing when a
     # face has "settled" -- the root cause of the mis-sampled red/blue centres.
     pending_key = 255  # 255 == no key
+    # Rolling buffer of the most recent detected centre samples. On SPACE we
+    # commit the MEDIAN of this buffer, not the single current frame, so one
+    # glitchy frame (motion blur, glare, a slightly-off detected centre) at the
+    # instant of the key press can't poison a colour's reference and make the
+    # gate reject every real instance of that face. This restores the
+    # robustness of the old auto-steady calibration while keeping SPACE control.
+    recent_centers: list = []
+    RECENT_MAX = 6
 
     try:
         while True:
@@ -110,12 +118,26 @@ def calibrate_and_spin(camera_index=0, steady_frames=6, debug=False):
                     if detected
                     else None
                 )
+                # Keep a short rolling buffer of detected centres; drop it when
+                # the face isn't detected so stale samples can't leak across.
+                if center is not None:
+                    recent_centers.append(center)
+                    if len(recent_centers) > RECENT_MAX:
+                        recent_centers.pop(0)
+                else:
+                    recent_centers.clear()
                 space_pressed = pending_key in (ord(" "), 13)
                 accepted = None
                 if space_pressed:
-                    accepted = tracker.commit(center)
+                    # Commit the MEDIAN of the recent steady samples, not the
+                    # single current frame (robust to a one-frame glitch).
+                    from .calibration import median_rgb
+                    sample = median_rgb(recent_centers) if recent_centers else center
+                    accepted = tracker.commit(sample)
                     if accepted is None and debug:
                         print(f"[debug] SPACE ignored: {tracker.last_message}")
+                    elif accepted is not None:
+                        recent_centers.clear()
                 expected = tracker.expected_face
                 capture._draw_closer_guide(display, detected)
 
