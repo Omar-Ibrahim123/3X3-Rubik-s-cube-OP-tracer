@@ -17,8 +17,9 @@ This repository currently contains the **pure-logic core**, fully tested:
 - ✅ **TPS counter** — `total turns / elapsed time`, driven by a simple
   `record_turn()` signal.
 - ✅ **Vision (static scan)** — automatic cube-face detection (finds the 9
-  sticker squares and orders them into a 3×3 grid) feeding a white-balanced
-  HSV color classifier, assembling a validated facelet string. Detection and
+  sticker squares and orders them into a 3×3 grid) feeding a **CIEDE2000**
+  perceptual color classifier (calibrated on all six centers, compared in CIE
+  L\*a\*b\*), assembling a validated facelet string. Detection and
   color logic are dependency-free and unit-tested; OpenCV is only needed to run
   a live scan. Fixed-box and manual flows remain as fallbacks. The future live
   turn detector plugs into the same `FaceletSource` seam.
@@ -170,7 +171,10 @@ square-on and filling the grid. If the spin flow struggles with your lighting,
 `--scan-manual` is the reliable fallback. Recalibrate under the same light you
 scan in.
 
-Example output for a scramble:
+For a `--scan`, this trace is shown in the **result window** (corners and edges
+in separate panels, with a parity banner), and the terminal stays clean. The
+`--facelets` command below prints the same trace to the terminal instead. The
+trace looks like:
 
 ```
 Corners: OP JG IT B
