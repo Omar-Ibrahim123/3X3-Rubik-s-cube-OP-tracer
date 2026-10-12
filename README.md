@@ -17,8 +17,9 @@ This repository currently contains the **pure-logic core**, fully tested:
 - ✅ **TPS counter** — `total turns / elapsed time`, driven by a simple
   `record_turn()` signal.
 - ✅ **Vision (static scan)** — automatic cube-face detection (finds the 9
-  sticker squares and orders them into a 3×3 grid) feeding a white-balanced
-  HSV color classifier, assembling a validated facelet string. Detection and
+  sticker squares and orders them into a 3×3 grid) feeding a **CIEDE2000**
+  perceptual color classifier (calibrated on all six centers, compared in CIE
+  L\*a\*b\*), assembling a validated facelet string. Detection and
   color logic are dependency-free and unit-tested; OpenCV is only needed to run
   a live scan. Fixed-box and manual flows remain as fallbacks. The future live
   turn detector plugs into the same `FaceletSource` seam.
@@ -48,6 +49,36 @@ corner = `A` (UBL), edge = `B` (UR). Buffers are named constants in
 
 Reference: [Speffz on the Speedsolving wiki](https://www.speedsolving.com/wiki/index.php/Speffz).
 *(Scheme described there; implementation here is original.)*
+
+## Quick start — scan your cube
+
+Everything runs locally; there is no website or server. You need **Python
+3.10+** and a **webcam**.
+
+```bash
+# 1. Get the code
+git clone https://github.com/Omar-Ibrahim123/3X3-Rubik-s-cube-OP-tracer.git
+cd 3X3-Rubik-s-cube-OP-tracer
+
+# 2. Install the scanning dependencies (OpenCV + numpy)
+pip install -r requirements-scan.txt
+
+# 3. Scan — calibrate, spin through all six faces, confirm, done
+python -m app.main --scan          # add --camera 1 if the wrong camera opens
+```
+
+Everything happens **in the on-screen windows** — the terminal stays clean
+(the only thing in your shell is the command you ran):
+
+- When a face is read, the detected cube is shown as a coloured net. Press
+  **Y** in that window to accept, or **N** to re-scan (Q/Esc also re-scans).
+- After you accept, a **result window** opens with your Old Pochmann trace,
+  **corners and edges in separate panels** (plus a parity banner if parity
+  applies). Press any key in that window to close it.
+
+> Tip: hold the cube **close** so it fills the on-screen box, use even lighting,
+> and avoid glare. If auto-detection struggles, see the fallback scan modes
+> below.
 
 ## Usage
 
@@ -85,8 +116,13 @@ phases:
    colors. This learns your cube's **real** colors.
 2. **Spin** — without switching windows, slowly rotate the cube through all six
    faces; each is detected and captured once held steady.
-3. **Confirm** — it prints the detected cube; press **y** to accept (or **n** to
-   re-scan). Then it prints the OP trace.
+3. **Confirm (in the window)** — it shows the detected cube as a coloured net
+   with a status line; press **Y** in the window to accept, or **N** to re-scan
+   (Q/Esc also re-scan). Nothing is typed in the terminal.
+4. **Result (in the window)** — a clean window pops up with your Old Pochmann
+   trace, **corners and edges split** into separate panels, plus a parity
+   banner when parity is present. Press any key in the window to close it. The
+   terminal stays clean throughout.
 
 Colors are classified by **CIEDE2000** perceptual distance in CIE L\*a\*b\*
 against your calibrated palette — comparing your real colors to your real colors
@@ -135,7 +171,10 @@ square-on and filling the grid. If the spin flow struggles with your lighting,
 `--scan-manual` is the reliable fallback. Recalibrate under the same light you
 scan in.
 
-Example output for a scramble:
+For a `--scan`, this trace is shown in the **result window** (corners and edges
+in separate panels, with a parity banner), and the terminal stays clean. The
+`--facelets` command below prints the same trace to the terminal instead. The
+trace looks like:
 
 ```
 Corners: OP JG IT B

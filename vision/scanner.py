@@ -102,8 +102,8 @@ class StaticScanner(FaceletSource):
         }
         result = solve_orientation(face_grids)
         if result.ok and result.facelets is not None:
-            if result.message:
-                print(f"[orientation] {result.message}")
+            # (orientation note intentionally not printed: keep the terminal
+            # clean; all scan feedback happens in the on-screen window)
             return result.facelets
         return facelets
 
@@ -161,14 +161,14 @@ class StaticScanner(FaceletSource):
                 from .confirm import build_report
 
                 report = build_report(facelets, faces, self._classifier)
-                # One-key confirm so a subtle misread doesn't silently trace.
+                # In-window confirm so a subtle misread doesn't silently trace.
+                # Nothing is printed: the terminal stays clean, the user accepts
+                # or re-scans with a keypress in the net window.
                 if capture.confirm_facelets(facelets, self._classifier, report):
                     return facelets
-                print("Re-scanning at your request...")
-            else:
-                print("Scan did not validate:")
-                for err in result.errors:
-                    print(f"  - {err}")
+            # Invalid scan or user re-scan: loop silently and try again. The
+            # terminal is kept clean on purpose (feedback is on-screen); the
+            # final give-up below still raises so the caller can report it.
 
             attempts += 1
             if attempts >= self._max_rescans:
@@ -176,4 +176,3 @@ class StaticScanner(FaceletSource):
                     f"scan not accepted after {attempts} attempts; "
                     "try even lighting and avoid glare on stickers"
                 )
-            print(f"Re-scanning (attempt {attempts + 1}/{self._max_rescans})...")

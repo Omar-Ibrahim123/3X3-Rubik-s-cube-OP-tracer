@@ -90,8 +90,31 @@ def cmd_scan(camera_index: int, manual: str, debug: bool) -> int:
     except (RuntimeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    print(f"\nScanned facelets: {facelets}\n")
-    return cmd_trace(facelets)
+    # Keep the terminal clean: do NOT print the facelets or the trace. The whole
+    # result (corners + edges, split, with parity) is shown in the on-screen
+    # window instead -- the only thing in the shell is the command the user ran.
+    try:
+        state = CubeState.from_facelets(facelets)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        from vision import capture
+
+        # Close the "detected cube" compare window so only the result shows.
+        try:
+            import cv2  # noqa: F401  (only to tear the net window down)
+
+            cv2.destroyWindow("detected cube")
+        except Exception:
+            pass
+        capture.show_trace_window(trace(state))
+    except Exception:  # pragma: no cover - no display available
+        # Headless fallback: with no window we must surface the trace somehow,
+        # so print it (this path only triggers when a window can't be shown).
+        print(trace(state))
+    return 0
 
 
 def cmd_save_frame(camera_index: int) -> int:
