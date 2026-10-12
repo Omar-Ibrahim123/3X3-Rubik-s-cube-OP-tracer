@@ -80,7 +80,11 @@ def calibrate_and_spin(camera_index=0, steady_frames=6, debug=False):
                 raise RuntimeError("failed to read camera frame")
 
             display = frame.copy()
-            centers = capture._detect_face_centers(frame)
+            # Restrict detection to the on-screen guide box: ignore everything
+            # outside it, which rejects background clutter and is much more
+            # robust in awkward lighting. The user keeps the cube in the box.
+            roi = capture._guide_roi(frame, capture.ROI_FRAC)
+            centers = capture._detect_face_centers(frame, roi=roi)
             detected = centers is not None
 
             if detected:
@@ -101,7 +105,7 @@ def calibrate_and_spin(camera_index=0, steady_frames=6, debug=False):
                 )
 
             if debug:
-                for x, y, width, height in capture._find_sticker_boxes(frame):
+                for x, y, width, height in capture._find_sticker_boxes(frame, roi=roi):
                     cv2.rectangle(
                         display,
                         (x, y),
