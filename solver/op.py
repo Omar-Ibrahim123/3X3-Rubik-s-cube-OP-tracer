@@ -4,16 +4,31 @@ Given a CubeState, produce the ordered list of Speffz "targets" for corners
 and edges independently. A target is the sticker you shoot the buffer to; the
 sequence of targets is the memo a blindfolded solver executes.
 
-Algorithm (pure permutation cycle-tracing):
+Algorithm (OP shot simulation):
 
-  1. Start at the buffer. Look at the piece in the buffer slot; the sticker it
-     carries tells you the next target. Emit it, move there, repeat.
-  2. When the chain returns to the buffer's piece, the cycle is closed.
-  3. Break into a new cycle: pick the first still-unsolved, unvisited sticker
-     (in canonical A..X order), emit it, and continue tracing.
-  4. In-place mis-oriented pieces (twisted corners / flipped edges) are
-     permutation fixed-points; a second pass emits the short cycles that
-     re-orient them.
+  OP solves a cube by repeatedly swapping the piece in the buffer slot with the
+  piece in a target slot. We trace by *simulating those swaps on the state*:
+
+  1. Look at the sticker in the buffer slot. That sticker IS the next target
+     (shoot there). Emit it and apply the swap to our working copy of the
+     state. Repeat while the buffer slot is unsolved.
+  2. When the buffer slot is solved but pieces remain, "break in": shoot a
+     still-unsolved slot (which parks the buffer piece there and brings a new
+     piece into the buffer), then resume step 1.
+  3. Simulating the swap means a piece that returns to its home slot *twisted
+     or flipped* is still seen as unsolved by step 1, so it is automatically
+     re-oriented by two further shots (shoot the home sticker, then the sticker
+     sitting in the home slot). This yields the cubing-theory cost of exactly
+     TWO targets for a flipped edge and TWO for a twisted corner, and needs no
+     separate orientation pass.
+
+Why simulate instead of a plain cycle walk? A plain permutation cycle walk
+only tracks *which piece* lands home, not its final orientation, so pieces
+cycled into place can be left twisted/flipped and never fixed, and a broken-in
+cycle leaves the buffer threaded out of place. Simulating the actual swaps
+makes orientation and buffer-threading fall out correctly, which an independent
+executor (tests/test_op_execution.py) confirms by replaying the memo and
+checking the cube ends solved.
 
 Parity: if the number of edge targets is odd, OP parity is present and the
 executor must apply the parity algorithm. We only report the flag here;
@@ -28,6 +43,18 @@ from typing import Dict, List, Tuple
 
 from cube import speffz
 from cube.state import CubeState
+
+# Corner slots whose Speffz companion ring is listed in the opposite rotational
+# sense from the others. A shot swaps the buffer slot's sticker-ring with the
+# target slot's sticker-ring; for all corner pieces except this one the two
+# rings align in companion order, but the D-F-L corner's companions are listed
+# the other way round, so when that slot is on either side of a swap its ring
+# must be read in reverse (keeping the pivot sticker fixed) for the swap to
+# match the physical cube. This is a fixed geometric property of the Speffz
+# corner lettering in cube/speffz.py (we do not modify that table); it is
+# verified exhaustively by the ground-truth executor in
+# tests/test_op_execution.py, which derives every swap from the move engine.
+_REVERSED_CORNER_SLOTS = frozenset(speffz.CORNER_COMPANIONS["U"])  # {'U','L','G'}
 
 
 @dataclass
@@ -57,6 +84,37 @@ def _pairs(letters: List[str]) -> List[str]:
     return out
 
 
+def _shoot(
+    at: Dict[str, str],
+    buffer: str,
+    target: str,
+    home: Dict[str, str],
+    companions: Dict[str, Tuple[str, ...]],
+) -> None:
+    """Apply one OP shot (swap buffer slot with target slot) to `at` in place.
+
+    The buffer piece and the piece in `target`'s slot trade places. We pair the
+    buffer slot's sticker-ring (companion ring, started at the buffer sticker)
+    with the target slot's sticker-ring (started at `target`) element by
+    element and exchange the stickers currently sitting in those positions.
+    For corners the two rings align in companion order, except that a ring on a
+    `_REVERSED_CORNER_SLOTS` slot must be read in reverse (pivot sticker fixed).
+    """
+    buf_ring = list(companions[buffer])
+    tgt_slot_ring = companions[home[target]]
+    i = tgt_slot_ring.index(target)
+    tgt_ring = list(tgt_slot_ring[i:] + tgt_slot_ring[:i])
+    if len(buf_ring) == 3:  # corner orientation correction (see note above)
+        if home[buffer] in _REVERSED_CORNER_SLOTS:
+            buf_ring = [buf_ring[0]] + buf_ring[1:][::-1]
+        if home[target] in _REVERSED_CORNER_SLOTS:
+            tgt_ring = [tgt_ring[0]] + tgt_ring[1:][::-1]
+    snapshot = dict(at)
+    for b_pos, t_pos in zip(buf_ring, tgt_ring):
+        at[b_pos] = snapshot[t_pos]
+        at[t_pos] = snapshot[b_pos]
+
+
 def _trace_orbit(
     at: Dict[str, str],
     buffer: str,
@@ -69,100 +127,54 @@ def _trace_orbit(
     `home[letter]` = canonical home letter of the piece a letter belongs to.
     `companions[letter]` = cyclic tuple of the piece's stickers starting at
     `letter`.
+
+    We work on a copy of `at` and simulate the OP shots (see module docstring),
+    so the caller's state is untouched and the emitted memo is exactly the
+    sequence of swaps that drives the copy to solved.
     """
+    work = dict(at)
     targets: List[str] = []
     buffer_piece = home[buffer]
-    # Pieces whose cycle we've already handled (by home letter).
-    solved_pieces = set()
+    all_positions = sorted(companions.keys())
+    # Stickers of the buffer piece itself; shooting to one of these is a no-op
+    # (you cannot shoot the buffer at itself), so they are never valid targets.
+    buffer_stickers = set(companions[buffer_piece])
 
-    def is_solved(pos: str) -> bool:
-        """A position is solved iff its occupying sticker is exactly itself."""
-        return at[pos] == pos
+    def first_breakin() -> str | None:
+        """First slot holding a shootable (non-buffer) out-of-place piece."""
+        for pos in all_positions:
+            if work[pos] != pos and work[pos] not in buffer_stickers:
+                return pos
+        return None
 
-    # A single orbit has at most 24 stickers; this caps any pathological walk
-    # (e.g. a malformed state) so tracing can never loop forever.
+    # A single orbit has 24 stickers; this caps any pathological walk (e.g. a
+    # malformed state) so tracing can never loop forever.
     max_steps = 100
-
-    # ---- Main walk: follow the cycle(s) containing the buffer. ----
-    current = buffer
     steps = 0
     while True:
         steps += 1
         if steps > max_steps:
             raise RuntimeError("trace did not terminate; malformed cube state")
-        occupant = at[current]  # sticker now sitting in `current`
-        # Where does that sticker belong? Shoot to that exact sticker.
-        target = occupant
-        if home[target] == buffer_piece:
-            # Chain has returned to the buffer piece: cycle closed.
-            solved_pieces.add(buffer_piece)
-            break
-        targets.append(target)
-        solved_pieces.add(home[target])
-        # Continue from the position this piece came from: move to the slot
-        # the target sticker names.
-        current = target
-
-    # ---- Break into remaining cycles. ----
-    # Canonical scan order: A..X by position letter.
-    all_positions = sorted(companions.keys())
-    while True:
-        start = None
-        for pos in all_positions:
-            piece = home[pos]
-            if piece in solved_pieces:
-                continue
-            if is_solved(pos):
-                # Permutation fixed-point; handled in orientation pass unless
-                # the whole piece is already solved.
-                continue
-            start = pos
-            break
-        if start is None:
-            break
-        # Break-in: emit the entering sticker, then trace its cycle.
-        targets.append(start)
-        current = start
-        start_piece = home[start]
-        steps = 0
-        while True:
-            steps += 1
-            if steps > max_steps:
-                raise RuntimeError(
-                    "trace did not terminate; malformed cube state"
-                )
-            occupant = at[current]
-            target = occupant
-            if home[target] == start_piece:
-                solved_pieces.add(start_piece)
+        occupant = work[buffer]  # sticker now sitting in the buffer slot
+        if occupant == buffer:
+            # Buffer slot solved: break into a remaining cycle, or finish.
+            start = first_breakin()
+            if start is None:
                 break
-            targets.append(target)
-            solved_pieces.add(home[target])
-            current = target
-
-    # ---- Orientation pass: in-place twisted/flipped pieces. ----
-    for pos in all_positions:
-        piece = home[pos]
-        if piece in solved_pieces:
-            continue
-        if pos != piece:
-            # Only act from the canonical home letter of the piece.
-            continue
-        occupant = at[pos]
-        if occupant == pos:
-            solved_pieces.add(piece)
-            continue
-        # Piece is at home but mis-oriented: emit its non-home stickers in
-        # orientation order to twist/flip it in place.
-        cycle = companions[pos]
-        # occupant is one of the companions; emit the others following the
-        # cyclic order so the piece is re-oriented.
-        idx = cycle.index(occupant)
-        rotated = cycle[idx:] + cycle[:idx]
-        # Shoot to each non-home sticker needed to restore orientation.
-        for sticker in rotated[1:]:
-            targets.append(sticker)
-        solved_pieces.add(piece)
+            target = start
+        elif occupant not in buffer_stickers:
+            # Normal shot: send the buffer piece to where its sticker belongs.
+            target = occupant
+        else:
+            # Buffer piece is home but mis-oriented and nothing else can be
+            # shot first; a legal cube state cannot reach this (orientation is
+            # balanced across the orbit), but guard against it to avoid looping.
+            start = first_breakin()
+            if start is None:
+                break
+            target = start
+        targets.append(target)
+        _shoot(work, buffer, target, home, companions)
 
     return targets
 
