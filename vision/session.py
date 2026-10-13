@@ -73,6 +73,12 @@ def calibrate_and_spin(camera_index=0, steady_frames=6, debug=False):
     recent_centers: list = []
     RECENT_MAX = 6
 
+    # Quit-confirmation guard: after the first q/Esc (with faces already
+    # collected) we "arm" quitting for a short window and require a second
+    # press to actually abort, so one stray key can't discard the scan.
+    quit_armed_ttl = 0
+    QUIT_CONFIRM_FRAMES = 40  # ~1-2s at typical webcam frame rates
+
     try:
         while True:
             ok, frame = cap.read()
@@ -339,10 +345,37 @@ def calibrate_and_spin(camera_index=0, steady_frames=6, debug=False):
                 if collector.is_complete():
                     return classifier, collector.faces()
 
+            # Quit guard: once any faces have been collected, a SINGLE q/Esc
+            # (a stray keypress, or the window briefly losing focus while you
+            # fight glare on one face) must not throw the whole scan away. Ask
+            # for a confirming second press within a short window; otherwise a
+            # fresh scan with nothing collected still quits on one press.
+            collected_count = (
+                len(collector.collected_faces()) if collector is not None else 0
+            )
+            if quit_armed_ttl > 0:
+                quit_armed_ttl -= 1
+                cv2.putText(
+                    display,
+                    f"press q again to discard {collected_count} scanned "
+                    "face(s) and quit",
+                    (20, display.shape[0] - 48),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 165, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+
             cv2.imshow(window, display)
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
-                raise KeyboardInterrupt("scan aborted")
+                # Nothing to lose, or already armed -> quit now. Otherwise arm
+                # the guard and wait for a confirming second press.
+                if collected_count == 0 or quit_armed_ttl > 0:
+                    raise KeyboardInterrupt("scan aborted")
+                quit_armed_ttl = QUIT_CONFIRM_FRAMES
+                key = 255  # consume this press; don't let it fall through
             # Remember this frame's key for the calibrate phase to consume next
             # frame (SPACE-to-capture). Reset once no longer calibrating.
             pending_key = key if phase == "calibrate" else 255
