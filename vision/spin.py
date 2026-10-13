@@ -76,6 +76,16 @@ DEFAULT_MAX_STICKER_DISTANCE = 18.0
 DEFAULT_MAX_OFF_STICKERS = 1
 DEFAULT_HARD_CEILING_DISTANCE = 22.0
 
+# How many GLARE-blown stickers (clipped highlight + unmatched -- see
+# is_glare_blown) a face may contain and still be accepted. Glare is distinct
+# from a mixed-region mis-detection: a face with its center confident and all
+# other stickers coherent, spoiled only by a couple of specular highlights, is
+# still a real face held square-on -- rejecting it just makes the glossy-cube
+# case impossible to scan. Non-glare off-stickers are still capped by
+# max_off_stickers and the hard ceiling exactly as before; only clipped-and-
+# unmatched highlights get this separate allowance.
+DEFAULT_MAX_GLARE_STICKERS = 2
+
 
 @dataclass
 class FaceCoherence:
@@ -84,10 +94,11 @@ class FaceCoherence:
     face: str                       # face letter the CENTER classifies as
     center_margin: float            # confidence gap of the center classification
     sticker_distances: List[float]  # each sticker's distance to nearest color
-    off_stickers: int               # how many stickers are far from every color
+    off_stickers: int               # non-glare stickers far from every color
     color_counts: Dict[str, int]    # per-face classification counts over the 9
     ok: bool
     reason: str = ""
+    glare_stickers: List[int] = field(default_factory=list)  # indices blown by glare
 
 
 def _nearest_reference_distance(
@@ -99,12 +110,46 @@ def _nearest_reference_distance(
     )
 
 
+# A glare-blown sticker is one the camera over-exposed: a specular highlight on
+# a glossy sticker clips one or more channels toward 255 and washes the colour
+# out, so the sample lands FAR from every calibrated colour. Real captured data
+# showed these as values like (238,249,255) / (230,244,255) -- a channel pinned
+# near 255 while the reading matches nothing (dE > 20).
+#
+# This is deliberately a TWO-part test so it can never flag a genuine sticker:
+#   1. clipped  -- at least one channel is at/near the 255 ceiling, AND
+#   2. unmatched -- the sample is far from EVERY calibrated colour.
+# A real bright sticker (even white) is not clipped on a well-exposed frame and
+# matches its calibrated colour closely, so condition (2) protects it. Both
+# conditions must hold, so a bright-but-real sticker is never called glare.
+DEFAULT_CLIP_CHANNEL = 250.0        # a channel this high is treated as clipped
+DEFAULT_GLARE_MIN_DISTANCE = 18.0   # and this far from any colour = washed out
+
+
+def is_glare_blown(
+    sample: RGB,
+    classifier: ColorClassifier,
+    clip_channel: float = DEFAULT_CLIP_CHANNEL,
+    min_distance: float = DEFAULT_GLARE_MIN_DISTANCE,
+) -> bool:
+    """True if `sample` looks like an over-exposed (glare) reading, not colour.
+
+    Pure and conservative: requires BOTH a clipped channel AND a poor match to
+    every calibrated colour, so a genuine bright sticker is never misflagged.
+    """
+    clipped = any(c >= clip_channel for c in sample)
+    if not clipped:
+        return False
+    return _nearest_reference_distance(sample, classifier) >= min_distance
+
+
 def face_coherence(
     samples: Sequence[RGB],
     classifier: ColorClassifier,
     max_sticker_distance: float = DEFAULT_MAX_STICKER_DISTANCE,
     max_off_stickers: int = DEFAULT_MAX_OFF_STICKERS,
     hard_ceiling_distance: float = DEFAULT_HARD_CEILING_DISTANCE,
+    max_glare_stickers: int = DEFAULT_MAX_GLARE_STICKERS,
 ) -> FaceCoherence:
     """Judge whether 9 sticker samples plausibly belong to ONE cube face.
 
@@ -133,26 +178,47 @@ def face_coherence(
 
     counts: Dict[str, int] = {}
     distances: List[float] = []
-    off = 0
-    for sample in samples:
+    off = 0                      # non-glare stickers far from every colour
+    glare_idx: List[int] = []    # stickers blown out by specular glare
+    off_distances: List[float] = []  # distances of the NON-glare off stickers
+    for i, sample in enumerate(samples):
         label = classifier.classify(sample)
         counts[label] = counts.get(label, 0) + 1
         d = _nearest_reference_distance(sample, classifier)
         distances.append(d)
         if d > max_sticker_distance:
-            off += 1
+            # Separate a washed-out specular highlight (recoverable: the face
+            # is still real) from a genuine mixed-region/off-cube sample (a
+            # mis-detection we must still reject).
+            if is_glare_blown(sample, classifier):
+                glare_idx.append(i)
+            else:
+                off += 1
+                off_distances.append(d)
 
     worst = max(distances)
+    # The hard ceiling only trips on NON-glare stickers: a glare highlight can
+    # legitimately be very far from every colour, so it must not by itself kill
+    # an otherwise-clean face. Mixed-region protection is unchanged.
+    worst_non_glare = max(off_distances) if off_distances else 0.0
     too_many_off = off > max_off_stickers
-    one_wildly_off = worst > hard_ceiling_distance
-    ok = not (too_many_off or one_wildly_off)
+    one_wildly_off = worst_non_glare > hard_ceiling_distance
+    too_much_glare = len(glare_idx) > max_glare_stickers
+    ok = not (too_many_off or one_wildly_off or too_much_glare)
     reason = ""
     if not ok:
-        reason = (
-            f"{off} of 9 stickers don't match any calibrated color "
-            f"(worst {worst:.1f} dE); "
-            "looks like a mixed region or off-cube sample, not one clean face"
-        )
+        if too_much_glare and not (too_many_off or one_wildly_off):
+            reason = (
+                f"{len(glare_idx)} of 9 stickers are blown out by glare "
+                f"(worst {worst:.1f} dE); tilt the cube or soften the light so "
+                "the shine moves off the stickers, then hold it square-on"
+            )
+        else:
+            reason = (
+                f"{off} of 9 stickers don't match any calibrated color "
+                f"(worst {worst_non_glare:.1f} dE); "
+                "looks like a mixed region or off-cube sample, not one clean face"
+            )
 
     return FaceCoherence(
         face=center_face,
@@ -162,6 +228,7 @@ def face_coherence(
         color_counts=counts,
         ok=ok,
         reason=reason,
+        glare_stickers=glare_idx,
     )
 
 
@@ -190,6 +257,7 @@ class SpinCollector:
     max_sticker_distance: float = DEFAULT_MAX_STICKER_DISTANCE
     max_off_stickers: int = DEFAULT_MAX_OFF_STICKERS
     hard_ceiling_distance: float = DEFAULT_HARD_CEILING_DISTANCE
+    max_glare_stickers: int = DEFAULT_MAX_GLARE_STICKERS
 
     _collected: Dict[str, List[RGB]] = field(default_factory=dict)
     _streak_face: Optional[str] = None
@@ -245,6 +313,7 @@ class SpinCollector:
                 max_sticker_distance=self.max_sticker_distance,
                 max_off_stickers=self.max_off_stickers,
                 hard_ceiling_distance=self.hard_ceiling_distance,
+                max_glare_stickers=self.max_glare_stickers,
             )
             if not coherence.ok:
                 self.last_rejection = coherence.reason
