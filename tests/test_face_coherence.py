@@ -126,3 +126,117 @@ def test_gate_still_passes_a_clean_scrambled_face():
 def test_wrong_sample_count_is_incoherent():
     clf = _real_classifier()
     assert not face_coherence([(0, 0, 0)] * 8, clf).ok
+
+
+# ---------------------------------------------------------------------------
+# Glare tolerance (added after real glossy-cube captures).
+#
+# The user's glossy GAN cube produces specular highlights that clip a channel
+# toward 255 and read far from every calibrated colour. These used to reject an
+# otherwise-clean face (1-2 blown stickers tripped the hard ceiling), making the
+# cube unscannable under their lighting. The gate now distinguishes a GLARE
+# sticker (clipped + unmatched) from a mixed-region sticker and tolerates a few.
+#
+# Data below is verbatim from the user's --debug output.
+# ---------------------------------------------------------------------------
+
+# The user's real calibrated palette from the glare session.
+GLARE_PALETTE = {
+    "U": (124, 157, 219),
+    "R": (155, 81, 106),
+    "F": (104, 150, 141),
+    "D": (190, 194, 148),
+    "L": (202, 129, 118),
+    "B": (52, 107, 202),
+}
+
+
+def _glare_classifier():
+    return ColorClassifier(references=dict(GLARE_PALETTE), perceptual=True)
+
+
+def test_face_with_one_glare_sticker_is_accepted():
+    """A real face spoiled only by a single specular highlight must pass.
+
+    Verbatim from the log: sticker 3 is (226,234,255) -- blue clipped at 255,
+    dE 23 to the nearest colour -- while the other eight classify cleanly. This
+    is a genuine face; rejecting it made the glossy cube unscannable.
+    """
+    from vision.spin import is_glare_blown
+
+    clf = _glare_classifier()
+    face = [
+        (143, 190, 190), (235, 161, 160), (146, 192, 188),
+        (226, 234, 255), (103, 151, 242), (88, 143, 236),
+        (92, 145, 241), (139, 184, 185), (232, 153, 148),
+    ]
+    result = face_coherence(face, clf)
+    assert result.ok, f"a face with one glare sticker was rejected: {result}"
+    assert result.glare_stickers == [3]
+    assert result.off_stickers == 0
+    # The clipped highlight IS glare; the bright-but-real L sticker is NOT.
+    assert is_glare_blown((226, 234, 255), clf)
+    assert not is_glare_blown((235, 161, 160), clf)
+
+
+def test_face_with_two_glare_stickers_is_accepted():
+    """Up to the glare cap (2) is tolerated when the rest is coherent."""
+    clf = _glare_classifier()
+    face = [
+        (228, 240, 255), (237, 167, 167), (149, 197, 194),
+        (185, 105, 148), (224, 230, 181), (227, 238, 255),
+        (231, 155, 156), (233, 154, 150), (88, 142, 235),
+    ]
+    result = face_coherence(face, clf)
+    assert result.ok, f"a face with two glare stickers was rejected: {result}"
+    assert len(result.glare_stickers) == 2
+
+
+def test_glare_does_not_flag_a_genuine_bright_sticker():
+    """SAFETY: a real bright sticker (matches a colour) is never called glare.
+
+    Guards the sunny-day case: brightness alone must not trip glare detection;
+    only a CLIPPED channel AND a poor colour match does.
+    """
+    from vision.spin import is_glare_blown
+
+    clf = _glare_classifier()
+    # Bright, but matches a calibrated colour closely -> not glare.
+    for sample in [(235, 161, 160), (103, 151, 242), (190, 194, 148)]:
+        assert not is_glare_blown(sample, clf), f"{sample} wrongly flagged glare"
+
+
+def test_mixed_region_with_clipped_sticker_still_rejected():
+    """A clipped sticker does NOT let a true mixed region through.
+
+    If a face has a clipped highlight AND other genuine off-cube samples, the
+    non-glare off-stickers must still reject it: glare tolerance only forgives
+    the highlights, not a real mis-detection.
+    """
+    clf = _glare_classifier()
+    # One glare highlight + three clearly off-cube (gap/edge) samples that are
+    # NOT clipped -> must reject on the non-glare off-stickers.
+    face = [
+        (235, 243, 255),   # glare (clipped)
+        (60, 60, 60),      # dark gap - off, not clipped
+        (70, 65, 60),      # dark gap - off, not clipped
+        (55, 58, 62),      # dark gap - off, not clipped
+        (103, 151, 242),   # real U
+        (88, 143, 236),    # real U
+        (92, 145, 241),    # real U
+        (139, 184, 185),   # real F
+        (232, 153, 148),   # real L
+    ]
+    result = face_coherence(face, clf)
+    assert not result.ok, "a mixed region with a glare sticker leaked through"
+
+
+def test_too_much_glare_is_still_rejected():
+    """Beyond the glare cap, the face is rejected with glare-specific guidance."""
+    clf = _glare_classifier()
+    glare = (235, 243, 255)       # clipped + unmatched
+    good = (103, 151, 242)        # real U center-ish
+    face = [glare, glare, glare, glare, good, good, good, good, good]
+    result = face_coherence(face, clf)
+    assert not result.ok
+    assert "glare" in result.reason.lower()
